@@ -2,6 +2,7 @@
 
 > Ce plan traduit les recommandations explicites du sujet (§V.1.1 « Development Approach ») en phases concrètes. L'ordre proposé suit deux principes directement issus du sujet :
 > 1. **Le sandbox est un prérequis** aux deux agents — aucun agent n'est testable sans lui (§III.1 pt.3, §V.2).
+| Dépôt Git | *à compléter* |
 > 2. **MBPP avant SWE-bench** — le sujet présente MBPP comme le benchmark le plus simple (problèmes algorithmiques isolés vs. bugs réels en conteneurs Docker), et le sujet lui-même traite MBPP (§V.3) avant SWE-bench (§V.4).
 >
 > Chaque phase liste : objectif, tâches, critère de sortie (« Definition of Done »), et référence au sujet.

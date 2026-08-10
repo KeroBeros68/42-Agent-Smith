@@ -13,9 +13,8 @@
 | Nom du projet | Agent Smith |
 | École | 42 |
 | Version du sujet | 1.1 |
-| Membres de l'équipe | *à compléter (logins)* |
-| Dépôt Git | *à compléter* |
-| Date de rendu / exam | *à compléter* |
+| Membres de l'équipe | *Gaspard TOURDIAT & Kevin Bertrand* |
+| Date de rendu / exam | *Estimé au 2026-09-01* |
 
 ---
 
