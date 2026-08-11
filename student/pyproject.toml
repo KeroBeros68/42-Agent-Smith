@@ -1,0 +1,11 @@
+[project]
+name = "student"
+version = "0.1.0"
+description = "Agent Smith - agent loop, sandbox and benchmark agents (MBPP, SWE-bench)"
+readme = "README.md"
+requires-python = "==3.10.*"
+dependencies = [
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+]
+
