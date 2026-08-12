@@ -5,6 +5,7 @@ description = "Agent Smith - agent loop, sandbox and benchmark agents (MBPP, SWE
 readme = "README.md"
 requires-python = "==3.10.*"
 dependencies = [
+    "docker>=7.2.0",
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
 ]
@@ -14,5 +15,6 @@ dev = [
     "flake8>=7.3.0",
     "mypy>=2.3.0",
     "pytest>=9.1.1",
+    "types-docker>=7.2.0.20260811",
 ]
 
