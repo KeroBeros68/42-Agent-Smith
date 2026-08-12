@@ -9,3 +9,10 @@ dependencies = [
     "python-dotenv>=1.0.0",
 ]
 
+[dependency-groups]
+dev = [
+    "flake8>=7.3.0",
+    "mypy>=2.3.0",
+    "pytest>=9.1.1",
+]
+

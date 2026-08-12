@@ -1,0 +1,23 @@
+{
+    "authorized_imports": [
+        "math",
+        "random",
+        "itertools",
+        "collections",
+        "functools",
+        "operator",
+        "heapq",
+        "bisect",
+        "string",
+        "re",
+        "datetime",
+        "time",
+        "json",
+        "csv",
+        "pathlib",
+        "typing"
+    ],
+    "allowed_directories": ["/workspace"],
+    "max_execution_time_seconds": 10,
+    "max_memory_mb": 256
+}
