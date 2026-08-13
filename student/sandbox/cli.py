@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 from sandbox.config import SandboxConfig
+from sandbox.container import SandboxContainer
 
 PROG_NAME = "sandbox"
 PROG_DESCRIPTION = "Secure sandbox for LLM-generated code execution."
@@ -29,6 +30,9 @@ MCP_STDIO_HELP = (
 MCP_SERVER_HELP = (
     "URL of an MCP server reachable over HTTP streamable transport."
 )
+
+DEFAULT_SANDBOX_IMAGE = "agent-smith-sandbox:latest"
+SANDBOX_BUILD_CONTEXT = Path(__file__).parent
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,3 +65,6 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     config = load_config(args.config_file)
+    container = SandboxContainer(
+        config, image=DEFAULT_SANDBOX_IMAGE, build_context=SANDBOX_BUILD_CONTEXT
+    )

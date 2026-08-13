@@ -13,10 +13,13 @@ Uses docker-py. Responsibilities:
 """
 
 import io
+import json
 import tarfile
 from pathlib import Path
+from typing import Any
 
 import docker
+from docker.errors import ImageNotFound
 from docker.models.containers import Container
 
 from sandbox.config import SandboxConfig
@@ -34,35 +37,74 @@ def _build_executor_archive() -> bytes:
 
 
 class SandboxContainer:
-    def __init__(self, config: SandboxConfig, image: str) -> None:
+    def __init__(
+        self,
+        config: SandboxConfig,
+        image: str,
+        build_context: Path | None = None,
+    ) -> None:
         self._client = docker.from_env()
         self._config = config
         self._image = image
+        self._build_context = build_context
         self._container: Container | None = None
+        self._socket: Any = None
+        self._recv_buffer: bytes = b""
+
+    def _ensure_image(self) -> None:
+        if self._build_context is not None:
+            self._client.images.build(
+                path=str(self._build_context), tag=self._image
+            )
+            return
+        try:
+            self._client.images.get(self._image)
+        except ImageNotFound:
+            self._client.images.pull(self._image)
 
     def start(self) -> None:
-        self._container = self._client.containers.create(
+        self._ensure_image()
+        container = self._client.containers.create(
             image=self._image,
             command=["python3", f"{EXECUTOR_CONTAINER_PATH}/runner.py"],
             detach=True,
             network_mode="none",
             mem_limit=f"{self._config.max_memory_mb}m",
             stdin_open=True,
-            stdout=True,
-            stderr=True,
+            tty=True,
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
         )
-        self._inject_executor()
-        self._container.start()
+        self._inject_executor(container)
+        container.start()
+        self._container = container
+        self._socket = container.attach_socket(
+            params={"stdin": 1, "stdout": 1, "stream": 1}
+        )
 
-    def _inject_executor(self) -> None:
+    def _inject_executor(self, container: Container) -> None:
         archive = _build_executor_archive()
-        self._container.put_archive(path="/", data=archive)
+        container.put_archive(path="/", data=archive)
+
+    def send(self, message: dict[str, Any]) -> None:
+        data = (json.dumps(message) + "\n").encode("utf-8")
+        self._socket._sock.sendall(data)
+
+    def receive(self) -> dict[str, Any]:
+        while b"\n" not in self._recv_buffer:
+            chunk = self._socket._sock.recv(4096)
+            if not chunk:
+                raise ConnectionError(
+                    "Sandbox container closed the connection"
+                )
+            self._recv_buffer += chunk
+        line, self._recv_buffer = self._recv_buffer.split(b"\n", 1)
+        return json.loads(line.decode("utf-8"))
 
     def stop(self) -> None:
         if self._container is not None:
             self._container.stop()
+            self._socket.close()
             self._container.remove()
             self._container = None
 
