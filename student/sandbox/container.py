@@ -32,6 +32,18 @@ EXECUTOR_CONTAINER_PATH = "/sandbox_executor"
 STREAM_STDOUT = 1
 FRAME_HEADER_SIZE = 8
 
+# Writable areas carved out of the read-only root filesystem. A tmpfs is
+# RAM-backed and mounted root:root 0755 by default, hence the explicit size
+# cap (DoS) and uid/gid (the container runs as the unprivileged `sandbox`
+# user). Paths are hardcoded on purpose: deriving them from
+# allowed_directories would tmpfs-mount /testbed for SWE-bench and mask the
+# task repository behind an empty mount.
+TMPFS_OPTIONS = "rw,noexec,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700"
+TMPFS_MOUNTS = {
+    "/workspace": TMPFS_OPTIONS,
+    "/tmp": TMPFS_OPTIONS,
+}
+
 
 def _recv_exactly(sock: Any, size: int) -> bytes:
     data = b""
@@ -91,6 +103,9 @@ class SandboxContainer:
             tty=False,
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
+            read_only=True,
+            tmpfs=TMPFS_MOUNTS,
+            pids_limit=self._config.pids_limit
         )
         self._inject_executor(container)
         container.start()

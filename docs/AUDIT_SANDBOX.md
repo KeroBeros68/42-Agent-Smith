@@ -33,7 +33,6 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 2. **Zéro gestion d'erreur, alors que §IV.1 en fait un critère d'échec** (« All errors must be handled gracefully — crashes during evaluation will result in failure »). Quatre crashes atteignables trivialement : chemin de config inexistant → `FileNotFoundError` brut ; JSON malformé → `json.JSONDecodeError` ; champ invalide → `pydantic.ValidationError` ; démon Docker absent → `docker.errors.DockerException`. Chacun sort une traceback Python au lieu d'un message + code retour.
 3. **`SANDBOX_BUILD_CONTEXT = Path(__file__).parent`** envoie **tout** `sandbox/` au démon Docker comme contexte de build — y compris `__pycache__/`, `container.py`, `mcp_bridge.py`. Aucun de ces fichiers n'est utilisé par le `Dockerfile`. Sans `.dockerignore`, chaque build transfère du bruit et tout changement dans n'importe quel `.py` invalide le cache de contexte.
 4. **Le docstring ment sur le comportement** : « either the REPL (no task) or a single task run » — il n'y a aucun argument de tâche dans le parser, et `main()` lance inconditionnellement le REPL. En soutenance, un docstring qui décrit une capacité absente est plus coûteux qu'un docstring vide.
-5. **Pas de `if __name__ == "__main__": main()`** — l'entry point `[project.scripts]` fonctionne, mais `python -m sandbox.cli` (réflexe courant en debug) ne fait rien du tout, silencieusement.
 
 ---
 
@@ -49,11 +48,7 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 
 ### ❌ Mauvais
 
-1. **`pathlib` dans l'allowlist annule l'intérêt d'avoir retiré `os`.** `pathlib.Path("/etc/passwd").read_text()`, `Path("/").iterdir()`, `Path(x).unlink()` — accès fichier complet en lecture, écriture et suppression. La porte `os` est fermée, la fenêtre `pathlib` est ouverte. Idem pour `csv` (qui ouvre des fichiers) dans une moindre mesure. Le sujet ne liste **ni** `pathlib` **ni** `csv` dans son exemple de défaut, probablement pour cette raison.
-2. **`allowed_directories: ["/workspace"]` ignore `/testbed`.** Le sujet est explicite : les dépôts SWE-bench vivent dans `/testbed`, et l'exemple de config du sujet est `["/testbed", "/tmp/agent"]`. La justification donnée (« plusieurs entrées pour séparer le workspace de la tâche d'une zone scratch inscriptible ») indique un usage attendu à deux répertoires. Ce défaut-là bloquera les tâches SWE-bench.
-3. **Aucune notion de wildcard.** Le sujet écrit `"math.*"`, `"collections.*"`, `"typing.*"`, `"datetime.*"` dans sa config de référence. Avec un matching par égalité de chaîne, `import collections.abc` sera refusé alors que `collections` est autorisé — et `collections.abc` est utilisé par du code Python parfaitement banal. La syntaxe de motif doit être décidée **dans ce fichier** avant d'écrire `restrictions.py`, sinon les deux divergeront.
-4. **Modules absents du défaut du sujet** : `copy`, `array`, `cmath`. `copy` en particulier (`deepcopy`) apparaît constamment dans des solutions MBPP. Rien n'oblige à recopier la liste du sujet, mais une divergence en *moins* sur un module courant se paiera en tâches échouées.
-5. **Aucune contrainte de validation** — `max_execution_time_seconds: int` accepte `0` et `-5`. Un JSON avec `"max_memory_mb": 0` passerait la validation et produirait un conteneur ingérable. `Field(gt=0)` aurait un coût nul.
+1. **Les wildcards sont dans la liste, mais rien ne les interprète encore.** `"math.*"`, `"collections.*"`, `"datetime.*"`, `"typing.*"` sont désormais présents comme chaînes littérales dans `AUTHORIZED_IMPORTS` — mais `restrictions.py` (le fichier qui doit s'en servir) est encore un stub vide. Tant qu'il n'implémente pas le matching par motif, ces entrées ne valent qu'un match exact sur la chaîne `"math.*"`, ce qui n'autorise `import` d'aucun vrai module. Le format est choisi, le comportement ne l'est pas encore.
 
 ---
 
@@ -62,7 +57,7 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 ### ✅ Bon
 
 1. **`network_mode="none"`** — satisfait « No network access: Prevent any outbound or inbound network connections » (§V.2.3) au niveau du noyau, pas au niveau Python. C'est la seule des six contraintes de sécurité qui est actuellement **réellement** appliquée, et elle est incontournable depuis l'intérieur du conteneur.
-2. **`cap_drop=["ALL"]` + `security_opt=["no-new-privileges"]`** — non exigés par le sujet. Retirent toutes les capabilities Linux et empêchent tout gain de privilège via setuid. Le genre de choix que §VI.4 (« Sandbox security and isolation guarantees ») récompense en soutenance, à condition de savoir le justifier.
+2. **`cap_drop=["ALL"]` + `security_opt=["no-new-privileges"]` + `pids_limit` configurable** — non exigés par le sujet. Retirent toutes les capabilities Linux, empêchent tout gain de privilège via setuid, et bornent le nombre de process/threads (donc une fork bomb depuis le code exécuté). Le genre de choix que §VI.4 (« Sandbox security and isolation guarantees ») récompense en soutenance, à condition de savoir le justifier.
 3. **Séquence `create()` → `put_archive()` → `start()`** — correcte et, surtout, **unifiée** : le même chemin de code injecte l'exécuteur dans une image construite par l'équipe et dans une image SWE-bench arbitraire. Aucun `if benchmark == ...` dans le gestionnaire de conteneur.
 4. **`__enter__`/`__exit__` sans capture d'exception** — `__exit__` retourne `None` (falsy), donc toute exception, y compris `KeyboardInterrupt` et `SystemExit`, se propage après nettoyage. C'est précisément la contrainte §V.2.2. Beaucoup d'implémentations ratent ça en retournant `True`.
 5. **Le démultiplexage du flux Docker est correct** — `tty=False` évite l'écho TTY, `_recv_exactly()` gère un en-tête ou une charge utile coupés entre deux paquets TCP, et `receive()` sépare stdout (protocole) de stderr (tracebacks du conteneur, conservées dans `_stderr_buffer` au lieu d'être perdues). La boucle `while b"\n" not in self._recv_buffer` avec conservation du reste après `split(..., 1)` traite les deux cas durs du framing applicatif : message coupé en deux frames, et deux messages dans une seule frame.
@@ -73,6 +68,7 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 2. **`stop()` fuit un conteneur dès la première erreur.** Les trois appels sont séquentiels et non protégés : si `self._container.stop()` lève (`NotFound` si le conteneur est déjà mort, `APIError` si le démon hoquette), ni `_socket.close()` ni `remove()` ne s'exécutent → **conteneur orphelin**. Or §VII met le nettoyage explicitement à la charge de l'équipe. Second bug dans la même méthode : si `start()` échoue après `create()` mais avant l'affectation de `_socket`, celui-ci vaut `None` et `.close()` lève `AttributeError`. Il faut un `try/finally` par étape et `remove(force=True)`.
 3. **`_build_executor_archive()` embarque `__pycache__`.** `tar.add()` sur un répertoire récurse sans filtre. Il y a déjà des `__pycache__` dans `student/sandbox/` ; dès que `executor/` en aura, des `.pyc` potentiellement périmés seront injectés dans le conteneur, où ils primeront sur les `.py` si les timestamps s'alignent mal. Le paramètre `filter=` de `tar.add()` existe pour ça.
 4. **`_stderr_buffer` est rempli mais jamais lu.** Les tracebacks du conteneur sont désormais capturées, mais rien ne les remonte à l'utilisateur ni à la boucle agent. En l'état, un crash de `runner.py` se manifeste par un `ConnectionError` opaque alors que la cause exacte est disponible dans le buffer — exactement le « silent failure » que §V.1.3 interdit.
+5. **L'interaction `read_only=True` × `put_archive()` n'est pas vérifiée.** L'injection de `executor/` a lieu sur un conteneur *créé mais pas démarré*, et `ReadonlyRootfs` s'applique au démarrage — en théorie l'écriture passe par la couche d'image via le démon et n'est donc pas bloquée. À confirmer au premier run réel : si l'injection échoue, il faudra soit monter l'exécuteur autrement, soit relâcher `read_only`. Effet secondaire connu et bénin : Python ne peut plus écrire `__pycache__` à côté de `/sandbox_executor` (dégradation silencieuse, pas d'erreur).
 
 ---
 
@@ -102,17 +98,14 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 
 1. **`python:3.10-slim`** — respecte « You must use Python 3.10 » (§IV.1) au niveau de l'environnement d'exécution du code non fiable, pas seulement du projet.
 2. **`USER sandbox` (uid 1000, non-root)** — si `restrictions.py` était contourné, le code s'exécuterait quand même sans droits root **dans** le conteneur. Défense en profondeur, cumulée avec `cap_drop=ALL`.
-3. **`/workspace` créé puis `chown` à l'utilisateur sandbox** — le `WORKDIR` crée le répertoire en root ; sans le `chown` explicite, l'utilisateur non-root ne pourrait rien y écrire, et `allowed_directories: ["/workspace"]` serait un répertoire en lecture seule.
-4. **Aucun `apt-get`, aucun `pip install`** — l'allowlist ne contenant que de la stdlib, il n'y a rien à installer. Surface d'attaque minimale, image légère, build rapide.
-5. **Aucun `CMD`/`ENTRYPOINT`** — cohérent avec `container.py` qui passe toujours `command=` explicitement. Un défaut ici serait du code mort, ou pire, une divergence silencieuse entre l'image MBPP et les images SWE-bench.
+3. **Aucun `apt-get`, aucun `pip install`** — l'allowlist ne contenant que de la stdlib, il n'y a rien à installer. Surface d'attaque minimale, image légère, build rapide.
+4. **Aucun `CMD`/`ENTRYPOINT`** — cohérent avec `container.py` qui passe toujours `command=` explicitement. Un défaut ici serait du code mort, ou pire, une divergence silencieuse entre l'image MBPP et les images SWE-bench.
 
 ### ❌ Mauvais
 
-1. **`/workspace` n'est pas le seul répertoire inscriptible.** L'utilisateur `sandbox` peut écrire dans `/tmp`, `/home/sandbox`, `/dev/shm`. Aucun n'est dans `allowed_directories`. La restriction filesystem n'est donc **pas** appliquée par Docker et repose entièrement sur `restrictions.py` — qui n'existe pas encore. Aujourd'hui, le champ `allowed_directories` est purement décoratif. `read_only=True` + `tmpfs` sur `/workspace` côté `create()` rendrait la contrainte réelle.
-2. **Base non épinglée** — `python:3.10-slim` est un tag mutable. Un rebuild dans trois mois donnera une image différente. §III insiste sur la reproductibilité ; épingler par digest (`python:3.10-slim@sha256:...`) coûte une ligne.
-3. **Pas de `.dockerignore`** — combiné au contexte de build = tout `sandbox/` (point 3 de `cli.py`), chaque `docker build` transfère les sources Python et les `__pycache__`.
-4. **Les fichiers injectés par tar portent l'uid de l'hôte, pas 1000.** `tar.add()` préserve le propriétaire de la machine hôte. `/sandbox_executor/*` appartiendra donc à un uid arbitraire. Fonctionne tant que les permissions sont en lecture pour tous (cas usuel, 644), mais c'est une dépendance implicite au `umask` de la machine de développement.
-5. **`pids_limit` absent côté `create()`** — rien n'empêche une fork bomb depuis le code exécuté.
+1. **Pas de `.dockerignore`** — combiné au contexte de build = tout `sandbox/` (point 3 de `cli.py`), chaque `docker build` transfère les sources Python et les `__pycache__`.
+2. **Les fichiers injectés par tar portent l'uid de l'hôte, pas 1000.** `tar.add()` préserve le propriétaire de la machine hôte. `/sandbox_executor/*` appartiendra donc à un uid arbitraire. Fonctionne tant que les permissions sont en lecture pour tous (cas usuel, 644), mais c'est une dépendance implicite au `umask` de la machine de développement.
+3. **Le digest épinglé n'est vérifiable qu'au build.** Le format est un sha256 valide (64 caractères hex), mais rien ne garantit ici qu'il correspond réellement au manifeste publié de `python:3.10-slim` sans le vérifier contre le registre — une coquille de caractère resterait indétectable avant le premier `docker build` réel. À reconfirmer une fois l'image effectivement construite.
 
 ---
 
@@ -125,7 +118,7 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 | `final_answer` injecté | ❌ Absent |
 | `KeyboardInterrupt`/`SystemExit` propagées | ✅ Structurellement garanti par `__exit__` |
 | Restriction imports | ❌ Stub |
-| Restriction filesystem | ❌ Stub — champ config non appliqué |
+| Restriction filesystem | 🟡 Racine en read-only + tmpfs (Docker) ; l'allowlist `allowed_directories` reste à appliquer dans `restrictions.py` |
 | Pas de réseau | ✅ `network_mode="none"` |
 | Timeout d'exécution | ❌ Stub |
 | Limite mémoire | ✅ `mem_limit` |
@@ -142,9 +135,8 @@ Par ordre d'impact sur la note :
 
 1. **Écrire `executor/runner.py`** — sans lui, rien ne tourne (cf. préambule)
 2. **Brancher les flags MCP ignorés dans `cli.py`** (§V.2.5, exigence dure)
-3. **Implémenter `restrictions.py`** — c'est là que se jouent 3 des 6 contraintes de sécurité, et `exam_sandbox.sh` exige **100 %** de réussite (§VI.2)
-4. **Réaligner les défauts de `config.py`** (`/testbed`, retrait de `pathlib`, wildcards)
-5. **Robustesse** : timeout sur `receive()`, `try/finally` dans `stop()`, exploitation de `_stderr_buffer`, gestion d'erreurs dans `cli.py` (§IV.1)
+3. **Implémenter `restrictions.py`** — c'est là que se jouent 3 des 6 contraintes de sécurité, et `exam_sandbox.sh` exige **100 %** de réussite (§VI.2). Doit notamment interpréter le matching wildcard (`"math.*"`) déjà présent dans `AUTHORIZED_IMPORTS`, sinon ces entrées ne servent à rien.
+4. **Robustesse** : timeout sur `receive()`, `try/finally` dans `stop()`, exploitation de `_stderr_buffer`, gestion d'erreurs dans `cli.py` (§IV.1)
 
 ---
 
@@ -154,3 +146,14 @@ Par ordre d'impact sur la note :
 |---|---|---|---|
 | `tty=True` cassait le protocole (écho TTY renvoyant nos propres messages) | `container.py` | `tty=False` + démultiplexage des frames Docker (`_recv_exactly`, `_read_frame`), stderr capturé séparément | 2026-08-13 |
 | Convention d'import de `executor/` non tranchée | `executor/__init__.py` | Imports plats absolus (`import protocol`), lancement en script simple depuis `/sandbox_executor` ; décision et conséquences documentées dans le docstring du package | 2026-08-13 |
+| Tout le filesystem du conteneur était inscriptible (`/tmp`, `/home/sandbox`, `/dev/shm`) | `container.py` | `read_only=True` + `tmpfs` sur `/workspace` et `/tmp` avec `noexec,nosuid,nodev`, `size=64m` (un tmpfs est en RAM → DoS sinon) et `uid=1000,gid=1000` (sans quoi le montage root:root rendrait `/workspace` inutilisable pour l'utilisateur non-root) | 2026-08-13 |
+| `pids_limit` absent — pas de protection contre une fork bomb | `config.py`, `container.py`, `sandbox_template.json` | Champ `pids_limit` (défaut 64) ajouté au modèle, branché sur `create(pids_limit=self._config.pids_limit)` | 2026-08-13 |
+| Base `python:3.10-slim` non épinglée (tag mutable) | `Dockerfile` | `FROM python:3.10-slim@sha256:...` — digest fixe, format vérifié valide (64 hex) | 2026-08-13 |
+| `chown sandbox:sandbox /workspace` devenu mort après l'ajout du tmpfs | `Dockerfile` | Ligne retirée | 2026-08-13 |
+| `pathlib` dans l'allowlist annulait le retrait de `os` | `config.py` | `pathlib` retiré ; `copy`, `array`, `cmath` ajoutés (alignement sur la config de référence du sujet) ; notation wildcard (`math.*`, `collections.*`, `datetime.*`, `typing.*`) introduite dans la liste | 2026-08-13 |
+| Aucune contrainte de validation sur les champs numériques | `config.py` | `Field(gt=0)` sur `max_execution_time_seconds`, `max_memory_mb`, `pids_limit` | 2026-08-13 |
+| `pids_limit` sans description, docstring du fichier non mise à jour | `config.py` | Description ajoutée (« Maximum number of processes/threads … to prevent fork bombs »), docstring corrigée pour lister les 5 champs | 2026-08-13 |
+| Pas de `if __name__ == "__main__": main()` | `cli.py` | Ajouté | 2026-08-13 |
+| `csv` restait dans l'allowlist | `config.py` | Retiré | 2026-08-13 |
+| `allowed_directories` ignorait `/testbed` | `config.py` | `/testbed` ajouté à côté de `/workspace` | 2026-08-13 |
+| `Field(gt=0)` mal appliqué à `authorized_imports`/`allowed_directories` (contrainte numérique sur des `list[str]`) | `config.py` | Remplacé par `Field(min_length=1)` sur ces deux champs | 2026-08-13 |

@@ -1,9 +1,11 @@
 {
     "authorized_imports": [
         "math",
+        "math.*",
         "random",
         "itertools",
         "collections",
+        "collections.*",
         "functools",
         "operator",
         "heapq",
@@ -11,13 +13,17 @@
         "string",
         "re",
         "datetime",
+        "datetime.*",
         "time",
         "json",
-        "csv",
-        "pathlib",
-        "typing"
+        "typing",
+        "typing.*",
+        "copy",
+        "array",
+        "cmath"
     ],
-    "allowed_directories": ["/workspace"],
+    "allowed_directories": ["/workspace", "/testbed"],
     "max_execution_time_seconds": 10,
-    "max_memory_mb": 256
+    "max_memory_mb": 256,
+    "pids_limit": 64
 }

@@ -73,3 +73,7 @@ def main() -> None:
     )
     with container as c:
         repl.run(c)
+
+
+if __name__ == "__main__":
+    main()
