@@ -23,7 +23,8 @@ AUTHORIZED_IMPORTS = [
     "json",
     "csv",
     "pathlib",
-    "typing"]
+    "typing",
+]
 
 ALLOWED_DIRECTORIES = ["/workspace"]  # no host bind mount, decided 2026-08-12
 
@@ -34,17 +35,29 @@ MAX_MEMORY_MB = 256
 class SandboxConfig(BaseModel):
     authorized_imports: list[str] = Field(
         default=AUTHORIZED_IMPORTS,
-        description="Allowlist of Python modules the sandboxed code is permitted to import; everything else is blocked.",
+        description=(
+            "Allowlist of Python modules the sandboxed code is "
+            "permitted to import; everything else is blocked."
+        ),
     )
     allowed_directories: list[str] = Field(
         default=ALLOWED_DIRECTORIES,
-        description="Filesystem paths the sandboxed code may access, as seen by the sandbox process itself.",
+        description=(
+            "Filesystem paths the sandboxed code may access, "
+            "as seen by the sandbox process itself."
+        ),
     )
     max_execution_time_seconds: int = Field(
         default=MAX_EXECUTION_TIME_SECONDS,
-        description="Wall-clock timeout in seconds after which a running snippet is terminated.",
+        description=(
+            "Wall-clock timeout in seconds after which a "
+            "running snippet is terminated."
+        ),
     )
     max_memory_mb: int = Field(
         default=MAX_MEMORY_MB,
-        description="Maximum RAM in megabytes the sandboxed code may use before being terminated.",
+        description=(
+            "Maximum RAM in megabytes the sandboxed code may "
+            "use before being terminated."
+        ),
     )
