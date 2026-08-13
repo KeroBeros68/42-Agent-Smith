@@ -1,1 +1,1 @@
-"""Secure sandbox: CLI, REPL, Docker-backed execution isolation, MCP bridge (§V.2)."""
+"""Secure sandbox: CLI, REPL, Docker-backed isolation, MCP bridge (§V.2)."""
