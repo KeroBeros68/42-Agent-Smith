@@ -14,6 +14,7 @@ import argparse
 import json
 from pathlib import Path
 
+from sandbox import repl
 from sandbox.config import SandboxConfig
 from sandbox.container import SandboxContainer
 
@@ -66,5 +67,9 @@ def main() -> None:
     args = parser.parse_args()
     config = load_config(args.config_file)
     container = SandboxContainer(
-        config, image=DEFAULT_SANDBOX_IMAGE, build_context=SANDBOX_BUILD_CONTEXT
+        config,
+        image=DEFAULT_SANDBOX_IMAGE,
+        build_context=SANDBOX_BUILD_CONTEXT,
     )
+    with container as c:
+        repl.run(c)
