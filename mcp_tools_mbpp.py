@@ -3,11 +3,6 @@ This file contains an MCP server build with FastMCP.
 
 It contains useful tools that can be used in the agentic loop
 for the Agent Smith project.
-
---- DEVELOPER NOTE : ---
-The server currently doesn't have any timeout support. Any
-while True loop or anything like that will end up making the server
-loop in the void. Should consider implementing one to avoid this.
 """
 
 import json
