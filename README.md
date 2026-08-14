@@ -13,5 +13,5 @@
 
 ## Calling run_tests tool
 ```json
-{"jsonrpc": "2.0","id": 2,"method": "tools/call","params": {"name": "run_tests","arguments": {"code": "def sub_list(nums1, nums2):\n    print('test')\n    return list(map(lambda x, y: x + y, nums1, nums2))"}}}
+{"jsonrpc": "2.0","id": 2,"method": "tools/call","params": {"name": "run_tests","arguments": {"code": "def sub_list(nums1, nums2):\n    return list(map(lambda x, y: x - y, nums1, nums2))"}}}
 ```
