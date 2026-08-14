@@ -62,10 +62,8 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 
 ### ❌ Mauvais
 
-1. **`receive()` bloque indéfiniment, sans timeout.** Le socket est en mode bloquant. Si le conteneur se fige (boucle infinie et watchdog défaillant) ou meurt sans fermer proprement, `recv()` ne rend jamais la main — et la boucle agent avec lui. Les limites d'examen sont des murs de temps réel (120 s MBPP, 900 s SWE-bench) : un blocage ici fait échouer la tâche sans aucun diagnostic. `settimeout()` + gestion de `socket.timeout` est nécessaire.
-2. **`stop()` fuit un conteneur dès la première erreur.** Les trois appels sont séquentiels et non protégés : si `self._container.stop()` lève (`NotFound` si le conteneur est déjà mort, `APIError` si le démon hoquette), ni `_socket.close()` ni `remove()` ne s'exécutent → **conteneur orphelin**. Or §VII met le nettoyage explicitement à la charge de l'équipe. Second bug dans la même méthode : si `start()` échoue après `create()` mais avant l'affectation de `_socket`, celui-ci vaut `None` et `.close()` lève `AttributeError`. Il faut un `try/finally` par étape et `remove(force=True)`.
-3. **`_stderr_buffer` est rempli mais jamais lu.** Les tracebacks du conteneur sont désormais capturées, mais rien ne les remonte à l'utilisateur ni à la boucle agent. En l'état, un crash de `runner.py` se manifeste par un `ConnectionError` opaque alors que la cause exacte est disponible dans le buffer — exactement le « silent failure » que §V.1.3 interdit.
-4. **La tag de l'image dérivée (`sandbox-executor:<hash(base_image)>`) n'est jamais nettoyée.** Chaque base image distincte accumule une image dans le cache Docker local, jamais supprimée par `stop()`. Bénin en local, moins en CI si le disque est contraint.
+1. **`_stderr_buffer` est rempli mais jamais lu.** Les tracebacks du conteneur sont désormais capturées, mais rien ne les remonte à l'utilisateur ni à la boucle agent. En l'état, un crash de `runner.py` se manifeste par un `ConnectionError` opaque alors que la cause exacte est disponible dans le buffer — exactement le « silent failure » que §V.1.3 interdit.
+2. **La tag de l'image dérivée (`sandbox-executor:<hash(base_image)>`) n'est jamais nettoyée.** Chaque base image distincte accumule une image dans le cache Docker local, jamais supprimée par `stop()`. Bénin en local, moins en CI si le disque est contraint.
 
 ---
 
@@ -131,7 +129,7 @@ Par ordre d'impact sur la note :
 1. **Écrire `executor/runner.py`** — sans lui, rien ne tourne (cf. préambule)
 2. **Brancher les flags MCP ignorés dans `cli.py`** (§V.2.5, exigence dure)
 3. **Implémenter `restrictions.py`** — c'est là que se jouent 3 des 6 contraintes de sécurité, et `exam_sandbox.sh` exige **100 %** de réussite (§VI.2). Doit notamment interpréter le matching wildcard (`"math.*"`) déjà présent dans `AUTHORIZED_IMPORTS`, sinon ces entrées ne servent à rien.
-4. **Robustesse** : timeout sur `receive()`, `try/finally` dans `stop()`, exploitation de `_stderr_buffer`
+4. **Robustesse** : exploitation de `_stderr_buffer`, nettoyage de l'image dérivée `sandbox-executor:*`
 
 ---
 
@@ -156,3 +154,5 @@ Par ordre d'impact sur la note :
 | `put_archive()` échoue sur un conteneur `read_only=True` (« container rootfs is marked read-only »), vérifié empiriquement — l'injection tar était donc cassée dans tous les cas, pas seulement en théorie | `container.py` | Remplacé par une image dérivée `FROM {base_image}` + `COPY --chown=1000:1000 executor/ /sandbox_executor`, construite juste avant `create()` ; fonctionne uniformément pour l'image maison MBPP et une image SWE-bench arbitraire, corrige aussi au passage l'uid des fichiers injectés (c'était le point « Mauvais » n°2 du `Dockerfile` dans l'audit initial) et le risque `__pycache__` (filtre `_skip_pycache` sur `tar.add`) | 2026-08-14 |
 | Pas de `.dockerignore` — tout `sandbox/` envoyé comme contexte de build (sources, `__pycache__`), alors qu'aucun `COPY` n'utilisait ce contexte | `Dockerfile`, `cli.py` | `student/sandbox/.dockerignore` avec `*` (tout ignoré — le `Dockerfile` de base n'a aucun `COPY`) ; build réel testé (`docker build`) pour confirmer que rien ne casse | 2026-08-14 |
 | Digest `python:3.10-slim@sha256:...` non vérifié contre le registre | `Dockerfile` | Confirmé par un `docker build` réel réussi (image récupérée et construite avec succès) | 2026-08-14 |
+| `receive()` bloquait indéfiniment, sans timeout | `container.py` | `settimeout()` sur le socket attaché (`max_execution_time_seconds` + marge de 30 s), `TimeoutError` levée avec message clair dans `_recv_exactly()` | 2026-08-14 |
+| `stop()` fuyait un conteneur dès la première erreur (`AttributeError` possible si `_socket` restait `None`) | `container.py` | `try/finally` imbriqué par étape (stop → close socket → remove), `remove(force=True)`, l'état est remis à `None` quoi qu'il arrive | 2026-08-14 |

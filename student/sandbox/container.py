@@ -18,7 +18,7 @@ import io
 import json
 import tarfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import docker
 from docker.errors import ImageNotFound
@@ -34,6 +34,10 @@ EXECUTOR_CONTEXT_SUBDIR = "executor"
 # followed by the payload itself.
 STREAM_STDOUT = 1
 FRAME_HEADER_SIZE = 8
+
+# runner.py's watchdog must always respond within max_execution_time_seconds;
+# this margin covers network/serialization overhead on top of that bound.
+RECEIVE_TIMEOUT_MARGIN_SECONDS = 30
 
 # Writable areas carved out of the read-only root filesystem. A tmpfs is
 # RAM-backed and mounted root:root 0755 by default, hence the explicit size
@@ -51,7 +55,12 @@ TMPFS_MOUNTS = {
 def _recv_exactly(sock: Any, size: int) -> bytes:
     data = b""
     while len(data) < size:
-        chunk = sock.recv(size - len(data))
+        try:
+            chunk = sock.recv(size - len(data))
+        except TimeoutError:
+            raise TimeoutError(
+                "Sandbox container did not respond in time"
+            ) from None
         if not chunk:
             raise ConnectionError("Sandbox container closed the connection")
         data += chunk
@@ -153,8 +162,15 @@ class SandboxContainer:
         )
         container.start()
         self._container = container
-        self._socket = container.attach_socket(
-            params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
+        self._socket = cast(
+            Any,
+            container.attach_socket(
+                params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
+            ),
+        )
+        self._socket._sock.settimeout(
+            self._config.max_execution_time_seconds
+            + RECEIVE_TIMEOUT_MARGIN_SECONDS
         )
 
     def send(self, message: dict[str, Any]) -> None:
@@ -177,11 +193,19 @@ class SandboxContainer:
         return json.loads(line.decode("utf-8"))
 
     def stop(self) -> None:
-        if self._container is not None:
+        if self._container is None:
+            return
+        try:
             self._container.stop()
-            self._socket.close()
-            self._container.remove()
-            self._container = None
+        finally:
+            try:
+                if self._socket is not None:
+                    self._socket.close()
+            finally:
+                try:
+                    self._container.remove(force=True)
+                finally:
+                    self._container = None
 
     def __enter__(self) -> "SandboxContainer":
         self.start()
