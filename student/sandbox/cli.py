@@ -12,7 +12,11 @@ the REPL (no task) or a single task run.
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+import pydantic
+from docker.errors import DockerException
 
 from sandbox import repl
 from sandbox.config import SandboxConfig
@@ -65,14 +69,33 @@ def load_config(config_file: str | None) -> SandboxConfig:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    config = load_config(args.config_file)
-    container = SandboxContainer(
-        config,
-        image=DEFAULT_SANDBOX_IMAGE,
-        build_context=SANDBOX_BUILD_CONTEXT,
-    )
-    with container as c:
-        repl.run(c)
+
+    try:
+        config = load_config(args.config_file)
+    except FileNotFoundError:
+        print(
+            f"error: config file not found: {args.config_file}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"error: malformed config JSON: {e}", file=sys.stderr)
+        sys.exit(1)
+    except pydantic.ValidationError as e:
+        print(f"error: invalid sandbox config:\n{e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        container = SandboxContainer(
+            config,
+            image=DEFAULT_SANDBOX_IMAGE,
+            build_context=SANDBOX_BUILD_CONTEXT,
+        )
+        with container as c:
+            repl.run(c)
+    except DockerException as e:
+        print(f"error: could not reach Docker: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

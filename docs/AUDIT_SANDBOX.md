@@ -3,7 +3,7 @@
 > Audit de conformité de la partie sandbox réalisée à ce jour, par rapport au sujet officiel (`subject-1-1.txt`, v1.1) et au `CAHIER_DES_CHARGES.md`.
 >
 > **Date de l'audit** : 2026-08-13
-> **Dernière mise à jour** : 2026-08-13 — points corrigés retirés (voir « Corrigés depuis l'audit initial » en fin de document)
+> **Dernière mise à jour** : 2026-08-14 — points corrigés retirés (voir « Corrigés depuis l'audit initial » en fin de document)
 > **Périmètre** : `student/sandbox/` (fichiers implémentés uniquement) + `sandbox_template.json`
 > **Méthode** : 5 points positifs max et 5 points négatifs max par fichier, chacun justifié par référence au sujet ou par le comportement réel du code.
 
@@ -30,9 +30,7 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 ### ❌ Mauvais
 
 1. **`--mcp-stdio` / `--mcp-server` sont parsés puis totalement ignorés.** `args.mcp_stdio` et `args.mcp_server` ne sont lus nulle part dans `main()`. Concrètement, les 3 commandes du sujet qui incluent un flag MCP se comportent **exactement** comme `uv run sandbox` nu : aucun serveur connecté, aucun outil dans le namespace. C'est l'écart de conformité le plus large du fichier, et il touche une exigence dure (§V.2.5 : « Both stdio or streamable HTTP transports must be supported »).
-2. **Zéro gestion d'erreur, alors que §IV.1 en fait un critère d'échec** (« All errors must be handled gracefully — crashes during evaluation will result in failure »). Quatre crashes atteignables trivialement : chemin de config inexistant → `FileNotFoundError` brut ; JSON malformé → `json.JSONDecodeError` ; champ invalide → `pydantic.ValidationError` ; démon Docker absent → `docker.errors.DockerException`. Chacun sort une traceback Python au lieu d'un message + code retour.
-3. **`SANDBOX_BUILD_CONTEXT = Path(__file__).parent`** envoie **tout** `sandbox/` au démon Docker comme contexte de build — y compris `__pycache__/`, `container.py`, `mcp_bridge.py`. Aucun de ces fichiers n'est utilisé par le `Dockerfile`. Sans `.dockerignore`, chaque build transfère du bruit et tout changement dans n'importe quel `.py` invalide le cache de contexte.
-4. **Le docstring ment sur le comportement** : « either the REPL (no task) or a single task run » — il n'y a aucun argument de tâche dans le parser, et `main()` lance inconditionnellement le REPL. En soutenance, un docstring qui décrit une capacité absente est plus coûteux qu'un docstring vide.
+2. **Le docstring ment sur le comportement** : « either the REPL (no task) or a single task run » — il n'y a aucun argument de tâche dans le parser, et `main()` lance inconditionnellement le REPL. En soutenance, un docstring qui décrit une capacité absente est plus coûteux qu'un docstring vide.
 
 ---
 
@@ -102,8 +100,7 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 
 ### ❌ Mauvais
 
-1. **Pas de `.dockerignore`** — combiné au contexte de build = tout `sandbox/` (point 3 de `cli.py`), chaque `docker build` transfère les sources Python et les `__pycache__`.
-2. **Le digest épinglé n'est vérifiable qu'au build.** Le format est un sha256 valide (64 caractères hex), mais rien ne garantit ici qu'il correspond réellement au manifeste publié de `python:3.10-slim` sans le vérifier contre le registre — une coquille de caractère resterait indétectable avant le premier `docker build` réel. Vérifié le 2026-08-13 : build réel réussi avec ce digest.
+Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial » pour l'historique.
 
 ---
 
@@ -134,7 +131,7 @@ Par ordre d'impact sur la note :
 1. **Écrire `executor/runner.py`** — sans lui, rien ne tourne (cf. préambule)
 2. **Brancher les flags MCP ignorés dans `cli.py`** (§V.2.5, exigence dure)
 3. **Implémenter `restrictions.py`** — c'est là que se jouent 3 des 6 contraintes de sécurité, et `exam_sandbox.sh` exige **100 %** de réussite (§VI.2). Doit notamment interpréter le matching wildcard (`"math.*"`) déjà présent dans `AUTHORIZED_IMPORTS`, sinon ces entrées ne servent à rien.
-4. **Robustesse** : timeout sur `receive()`, `try/finally` dans `stop()`, exploitation de `_stderr_buffer`, gestion d'erreurs dans `cli.py` (§IV.1)
+4. **Robustesse** : timeout sur `receive()`, `try/finally` dans `stop()`, exploitation de `_stderr_buffer`
 
 ---
 
@@ -155,4 +152,7 @@ Par ordre d'impact sur la note :
 | `csv` restait dans l'allowlist | `config.py` | Retiré | 2026-08-13 |
 | `allowed_directories` ignorait `/testbed` | `config.py` | `/testbed` ajouté à côté de `/workspace` | 2026-08-13 |
 | `Field(gt=0)` mal appliqué à `authorized_imports`/`allowed_directories` (contrainte numérique sur des `list[str]`) | `config.py` | Remplacé par `Field(min_length=1)` sur ces deux champs | 2026-08-13 |
-| `put_archive()` échoue sur un conteneur `read_only=True` (« container rootfs is marked read-only »), vérifié empiriquement — l'injection tar était donc cassée dans tous les cas, pas seulement en théorie | `container.py` | Remplacé par une image dérivée `FROM {base_image}` + `COPY --chown=1000:1000 executor/ /sandbox_executor`, construite juste avant `create()` ; fonctionne uniformément pour l'image maison MBPP et une image SWE-bench arbitraire, corrige aussi au passage l'uid des fichiers injectés (point « Mauvais » ci-dessus sur `Dockerfile`) et le risque `__pycache__` (filtre `_skip_pycache` sur `tar.add`) | 2026-08-14 |
+| Zéro gestion d'erreur (§IV.1) — config introuvable/malformée, Docker absent → traceback brute | `cli.py` | `try/except` ciblés dans `main()` : `FileNotFoundError`, `json.JSONDecodeError`, `pydantic.ValidationError` autour du chargement de config ; `docker.errors.DockerException` autour du cycle de vie du conteneur. Message clair + `sys.exit(1)` ; `KeyboardInterrupt`/`SystemExit` non interceptés (§V.2.2 toujours respecté) | 2026-08-13 |
+| `put_archive()` échoue sur un conteneur `read_only=True` (« container rootfs is marked read-only »), vérifié empiriquement — l'injection tar était donc cassée dans tous les cas, pas seulement en théorie | `container.py` | Remplacé par une image dérivée `FROM {base_image}` + `COPY --chown=1000:1000 executor/ /sandbox_executor`, construite juste avant `create()` ; fonctionne uniformément pour l'image maison MBPP et une image SWE-bench arbitraire, corrige aussi au passage l'uid des fichiers injectés (c'était le point « Mauvais » n°2 du `Dockerfile` dans l'audit initial) et le risque `__pycache__` (filtre `_skip_pycache` sur `tar.add`) | 2026-08-14 |
+| Pas de `.dockerignore` — tout `sandbox/` envoyé comme contexte de build (sources, `__pycache__`), alors qu'aucun `COPY` n'utilisait ce contexte | `Dockerfile`, `cli.py` | `student/sandbox/.dockerignore` avec `*` (tout ignoré — le `Dockerfile` de base n'a aucun `COPY`) ; build réel testé (`docker build`) pour confirmer que rien ne casse | 2026-08-14 |
+| Digest `python:3.10-slim@sha256:...` non vérifié contre le registre | `Dockerfile` | Confirmé par un `docker build` réel réussi (image récupérée et construite avec succès) | 2026-08-14 |
