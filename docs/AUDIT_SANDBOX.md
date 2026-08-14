@@ -79,11 +79,9 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 
 ### ❌ Mauvais
 
-1. **`KeyboardInterrupt` non gérée → traceback à l'écran.** Ctrl+C pendant `input()` lève, traverse `run()`, traverse le `with` (qui nettoie correctement, ça c'est bon), puis s'affiche en traceback brute. Le sujet exige que `KeyboardInterrupt` **atteigne la boucle agent** (§V.2.2) — ce n'est pas la même chose que de la laisser produire un crash visible dans un REPL interactif, où §IV.1 demande une terminaison gracieuse. Comportement REPL attendu : Ctrl+C annule la ligne en cours et redonne le prompt, Ctrl+D quitte. Actuellement les deux quittent, l'un salement.
-2. **Une seule ligne à la fois.** `input()` lit une ligne. Impossible de saisir `def f():` suivi d'un corps indenté, ou un `for`, ou un `try`. Le sujet dit « read user-typed code in a loop » — du code Python multi-ligne est le cas normal, pas le cas limite. Il faut une logique de continuation (prompt secondaire tant que le bloc est incomplet).
-3. **`print(response)` affiche le dict brut** — l'utilisateur verra `{'type': 'result', 'stdout': '4\n'}` au lieu de `4`. Le sujet demande « it prints the result or any raised error » : résultat et erreur doivent être **distingués** visuellement, ce que l'affichage d'un dict ne fait pas.
-4. **`ConnectionError` de `receive()` non capturée** — c'est l'exception introduite dans `container.py` pour le cas « le conteneur a fermé la connexion ». Elle remonte ici en traceback. Vu le préambule (le conteneur meurt immédiatement aujourd'hui), c'est le chemin qui sera rencontré au tout premier test.
-5. **Le cas `final_answer` n'est pas traité.** Le sujet exige que le REPL ait « the connected MCP tool wrappers and final_answer available ». Si l'utilisateur tape `final_answer("x")`, le message de retour aura un type différent de `result` — et rien ici ne le reconnaît. L'implémentation est côté exécuteur, mais l'affichage est côté REPL.
+1. **`print(response)` affiche le dict brut** — l'utilisateur verra `{'type': 'result', 'stdout': '4\n'}` au lieu de `4`. Le sujet demande « it prints the result or any raised error » : résultat et erreur doivent être **distingués** visuellement, ce que l'affichage d'un dict ne fait pas.
+2. **`ConnectionError` de `receive()` non capturée** — c'est l'exception introduite dans `container.py` pour le cas « le conteneur a fermé la connexion ». Elle remonte ici en traceback. Vu le préambule (le conteneur meurt immédiatement aujourd'hui), c'est le chemin qui sera rencontré au tout premier test.
+3. **Le cas `final_answer` n'est pas traité.** Le sujet exige que le REPL ait « the connected MCP tool wrappers and final_answer available ». Si l'utilisateur tape `final_answer("x")`, le message de retour aura un type différent de `result` — et rien ici ne le reconnaît. L'implémentation est côté exécuteur, mais l'affichage est côté REPL.
 
 ---
 
@@ -107,7 +105,7 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 | Exigence | État |
 |---|---|
 | CLI `uv run sandbox` (4 formes) | 🟡 Parse tout, n'utilise que 2 formes sur 4 |
-| REPL interactif | 🟡 Boucle + sorties OK, mono-ligne, affichage brut |
+| REPL interactif | 🟡 Boucle, sorties, multi-ligne et Ctrl+C OK ; affichage brut, `final_answer` non traité |
 | `final_answer` injecté | ❌ Absent |
 | `KeyboardInterrupt`/`SystemExit` propagées | ✅ Structurellement garanti par `__exit__` |
 | Restriction imports | ❌ Stub |
@@ -156,3 +154,5 @@ Par ordre d'impact sur la note :
 | Digest `python:3.10-slim@sha256:...` non vérifié contre le registre | `Dockerfile` | Confirmé par un `docker build` réel réussi (image récupérée et construite avec succès) | 2026-08-14 |
 | `receive()` bloquait indéfiniment, sans timeout | `container.py` | `settimeout()` sur le socket attaché (`max_execution_time_seconds` + marge de 30 s), `TimeoutError` levée avec message clair dans `_recv_exactly()` | 2026-08-14 |
 | `stop()` fuyait un conteneur dès la première erreur (`AttributeError` possible si `_socket` restait `None`) | `container.py` | `try/finally` imbriqué par étape (stop → close socket → remove), `remove(force=True)`, l'état est remis à `None` quoi qu'il arrive | 2026-08-14 |
+| `KeyboardInterrupt` non gérée dans le REPL → traceback à l'écran au lieu d'annuler la ligne en cours | `repl.py` | Ctrl+C réinitialise le buffer et redonne le prompt `>>>` (comportement REPL standard) ; seul Ctrl+D (EOF) quitte, inchangé | 2026-08-14 |
+| REPL limité à une ligne — impossible de saisir `def`/`for`/`try` multi-ligne | `repl.py` | `_read_block()` accumule les lignes et utilise `codeop.compile_command()` (le module stdlib du vrai REPL Python) pour détecter bloc incomplet (prompt `...`) vs complet vs syntaxe invalide ; comportement vérifié manuellement contre plusieurs cas (`def` seul, `def`+corps, `def`+corps+ligne vide, syntaxe invalide) | 2026-08-14 |
