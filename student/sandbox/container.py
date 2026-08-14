@@ -4,14 +4,16 @@
 Uses docker-py. Responsibilities:
 - build/pull the right image (team-built minimal image for MBPP, task-provided
   `docker_image` for SWE-bench per §VII.2)
-- for SWE-bench, `docker cp` the executor/ package into the container
-    before start
+- layer a derived image `FROM` that base with executor/ baked in via `COPY`
+  (put_archive/`docker cp` cannot write into a read_only=True container, so
+  the executor must be in the image before start, not injected after)
 - start the container with --network none, memory limit from SandboxConfig,
   and attach stdio for the JSON Lines protocol (sandbox/executor/protocol.py)
 - guarantee teardown in a `finally` (§VII, cleanup at the team's charge),
   without swallowing KeyboardInterrupt/SystemExit (§V.2.2)
 """
 
+import hashlib
 import io
 import json
 import tarfile
@@ -25,6 +27,7 @@ from docker.models.containers import Container
 from sandbox.config import SandboxConfig
 
 EXECUTOR_CONTAINER_PATH = "/sandbox_executor"
+EXECUTOR_CONTEXT_SUBDIR = "executor"
 
 # Docker multiplexes container output when no TTY is allocated: each frame is
 # an 8-byte header (stream type, 3 padding bytes, big-endian payload size)
@@ -55,13 +58,28 @@ def _recv_exactly(sock: Any, size: int) -> bytes:
     return data
 
 
-def _build_executor_archive() -> bytes:
+def _skip_pycache(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    if "__pycache__" in tarinfo.name or tarinfo.name.endswith(".pyc"):
+        return None
+    return tarinfo
+
+
+def _build_executor_image_context(dockerfile: str) -> io.BytesIO:
+    # The Dockerfile itself lives at the context root, alongside but outside
+    # the "executor" subdir, so `COPY executor/ ...` below never copies it
+    # into the image.
     executor_dir = Path(__file__).parent / "executor"
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as tar:
-        tar.add(executor_dir, arcname=EXECUTOR_CONTAINER_PATH.lstrip("/"))
+        tar.add(
+            executor_dir, arcname=EXECUTOR_CONTEXT_SUBDIR, filter=_skip_pycache
+        )
+        dockerfile_bytes = dockerfile.encode("utf-8")
+        info = tarfile.TarInfo("Dockerfile")
+        info.size = len(dockerfile_bytes)
+        tar.addfile(info, io.BytesIO(dockerfile_bytes))
     buffer.seek(0)
-    return buffer.read()
+    return buffer
 
 
 class SandboxContainer:
@@ -75,6 +93,7 @@ class SandboxContainer:
         self._config = config
         self._image = image
         self._build_context = build_context
+        self._runtime_image: str | None = None
         self._container: Container | None = None
         self._socket: Any = None
         self._recv_buffer: bytes = b""
@@ -85,16 +104,41 @@ class SandboxContainer:
             self._client.images.build(
                 path=str(self._build_context), tag=self._image
             )
-            return
-        try:
-            self._client.images.get(self._image)
-        except ImageNotFound:
-            self._client.images.pull(self._image)
+        else:
+            try:
+                self._client.images.get(self._image)
+            except ImageNotFound:
+                self._client.images.pull(self._image)
+        self._runtime_image = self._build_executor_image(self._image)
+
+    def _build_executor_image(self, base_image: str) -> str:
+        # A container created with read_only=True refuses put_archive/docker
+        # cp ("container rootfs is marked read-only"), including before
+        # start(). Baking the executor in at build time sidesteps that
+        # entirely, and works uniformly whether base_image was just built
+        # (MBPP) or pulled as-is (task-provided SWE-bench image) — the build
+        # is a plain `docker build`, unrelated to any runtime read-only
+        # constraint. --chown pins ownership to the sandbox user (uid 1000)
+        # instead of the host uid tar.add() used to preserve.
+        tag = "sandbox-executor:" + hashlib.sha256(
+            base_image.encode("utf-8")
+        ).hexdigest()[:16]
+        dockerfile = (
+            f"FROM {base_image}\n"
+            f"COPY --chown=1000:1000 {EXECUTOR_CONTEXT_SUBDIR}/ "
+            f"{EXECUTOR_CONTAINER_PATH}\n"
+        )
+        context = _build_executor_image_context(dockerfile)
+        self._client.images.build(
+            fileobj=context, custom_context=True, tag=tag
+        )
+        return tag
 
     def start(self) -> None:
         self._ensure_image()
+        assert self._runtime_image is not None
         container = self._client.containers.create(
-            image=self._image,
+            image=self._runtime_image,
             command=["python3", f"{EXECUTOR_CONTAINER_PATH}/runner.py"],
             detach=True,
             network_mode="none",
@@ -107,16 +151,11 @@ class SandboxContainer:
             tmpfs=TMPFS_MOUNTS,
             pids_limit=self._config.pids_limit
         )
-        self._inject_executor(container)
         container.start()
         self._container = container
         self._socket = container.attach_socket(
             params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
         )
-
-    def _inject_executor(self, container: Container) -> None:
-        archive = _build_executor_archive()
-        container.put_archive(path="/", data=archive)
 
     def send(self, message: dict[str, Any]) -> None:
         data = (json.dumps(message) + "\n").encode("utf-8")
