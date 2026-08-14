@@ -80,8 +80,7 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 ### ❌ Mauvais
 
 1. **`print(response)` affiche le dict brut** — l'utilisateur verra `{'type': 'result', 'stdout': '4\n'}` au lieu de `4`. Le sujet demande « it prints the result or any raised error » : résultat et erreur doivent être **distingués** visuellement, ce que l'affichage d'un dict ne fait pas.
-2. **`ConnectionError` de `receive()` non capturée** — c'est l'exception introduite dans `container.py` pour le cas « le conteneur a fermé la connexion ». Elle remonte ici en traceback. Vu le préambule (le conteneur meurt immédiatement aujourd'hui), c'est le chemin qui sera rencontré au tout premier test.
-3. **Le cas `final_answer` n'est pas traité.** Le sujet exige que le REPL ait « the connected MCP tool wrappers and final_answer available ». Si l'utilisateur tape `final_answer("x")`, le message de retour aura un type différent de `result` — et rien ici ne le reconnaît. L'implémentation est côté exécuteur, mais l'affichage est côté REPL.
+2. **Le cas `final_answer` n'est pas traité.** Le sujet exige que le REPL ait « the connected MCP tool wrappers and final_answer available ». Si l'utilisateur tape `final_answer("x")`, le message de retour aura un type différent de `result` — et rien ici ne le reconnaît. L'implémentation est côté exécuteur, mais l'affichage est côté REPL.
 
 ---
 
@@ -156,3 +155,4 @@ Par ordre d'impact sur la note :
 | `stop()` fuyait un conteneur dès la première erreur (`AttributeError` possible si `_socket` restait `None`) | `container.py` | `try/finally` imbriqué par étape (stop → close socket → remove), `remove(force=True)`, l'état est remis à `None` quoi qu'il arrive | 2026-08-14 |
 | `KeyboardInterrupt` non gérée dans le REPL → traceback à l'écran au lieu d'annuler la ligne en cours | `repl.py` | Ctrl+C réinitialise le buffer et redonne le prompt `>>>` (comportement REPL standard) ; seul Ctrl+D (EOF) quitte, inchangé | 2026-08-14 |
 | REPL limité à une ligne — impossible de saisir `def`/`for`/`try` multi-ligne | `repl.py` | `_read_block()` accumule les lignes et utilise `codeop.compile_command()` (le module stdlib du vrai REPL Python) pour détecter bloc incomplet (prompt `...`) vs complet vs syntaxe invalide ; comportement vérifié manuellement contre plusieurs cas (`def` seul, `def`+corps, `def`+corps+ligne vide, syntaxe invalide) | 2026-08-14 |
+| `ConnectionError` de `receive()` non capturée dans le REPL — traceback si le conteneur meurt | `repl.py` | `try/except ConnectionError` autour de `send`/`receive`, message clair + sortie propre de la boucle | 2026-08-14 |

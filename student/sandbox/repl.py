@@ -48,6 +48,10 @@ def run(container: SandboxContainer) -> None:
         if not source.strip():
             continue
 
-        container.send({"type": "exec", "code": source})
-        response = container.receive()
-        print(response)
+        try:
+            container.send({"type": "exec", "code": source})
+            response = container.receive()
+            print(response)
+        except (ConnectionError, TimeoutError):
+            print("Connection to container lost.")
+            break
