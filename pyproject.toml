@@ -31,6 +31,7 @@ packages = [
     "student/agent_core",
     "student/agent_mbpp",
     "student/agent_swebench",
+    "student/data_models",
     "student/sandbox",
 ]
 
