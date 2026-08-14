@@ -57,6 +57,7 @@ TIMEOUT_DELAY_SEC = 10
 
 # --- MCP Tools ---
 
+
 @mcp.tool
 def run_tests(code: str) -> str:
     """Run unit tests to check if a given function passes the unit tests."""
@@ -77,7 +78,9 @@ def run_tests(code: str) -> str:
     try:
         compile(f"{imports}\n\n{code}", "<mbpp_solution>", "exec")
     except SyntaxError as e:
-        loc = f"line {e.lineno}" if e.lineno is not None else "unknown location"
+        loc = (
+            f"line {e.lineno}" if e.lineno is not None else "unknown location"
+        )
         return (
             f"SyntaxError in the submitted code: {e.msg} at {loc}. "
             f"Fix it and retry — tests cannot run against invalid Python."
@@ -96,7 +99,9 @@ def run_tests(code: str) -> str:
             if proc.returncode != 0:
                 failed_tests.append(f"{test}")
         except subprocess.TimeoutExpired:
-            failed_tests.append(f"{test}  # TIMEDOUT AFTER {TIMEOUT_DELAY_SEC} SECONDS")
+            failed_tests.append(
+                f"{test}  # TIMEDOUT AFTER {TIMEOUT_DELAY_SEC} SECONDS"
+            )
     if len(failed_tests) != 0:
         return "Error during the following tests :\n" + "\n".join(failed_tests)
     return "All test passed successfully !"
