@@ -8,8 +8,8 @@ for the Agent Smith project.
 import glob
 import json
 import os
-import subprocess
-import sys
+import re
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
@@ -122,9 +122,45 @@ def list_files(directory: str, pattern: str) -> str:
         return f"No files matching '{pattern}' found in {directory}."
     return "\n".join(matches)
 
-# @mcp.tool
-# def search_code(pattern, file_pattern) -> str:
-    
+@mcp.tool
+def search_code(pattern: str, file_pattern: str = "*") -> str:
+    """Performs a grep-like search across the codebase and returns formatted matches."""
+    root_dir = '/testbed'
+    results = []
+
+    try:
+        compiled_regex = re.compile(pattern)
+    except re.error as e:
+        return f"Error: Invalid regular expression pattern '{pattern}': {e}"
+
+    base_path = Path(root_dir).resolve()
+
+    if not base_path.exists():
+        return f"Error: Workspace path '{root_dir}' does not exist."
+
+    # Recursively match files based on file_pattern
+    for file_path in base_path.rglob(file_pattern):
+        # Skip directories and non-regular files
+        if not file_path.is_file():
+            continue
+
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line_number, line in enumerate(f, start=1):
+                    if compiled_regex.search(line):
+                        # Format: /absolute/path:<line_number> <line_content>
+                        abs_path = file_path.resolve()
+                        results.append(f"{abs_path}:{line_number} {line.rstrip()}")
+        except Exception:
+            # Silently skip unreadable files or binary files
+            continue
+
+    if not results:
+        return "No matches found."
+
+    return "\n".join(results)
+
+
 
 if __name__ == "__main__":
     # Listen to input

@@ -30,3 +30,8 @@
 ```json
 {"jsonrpc": "2.0","id": 2,"method": "tools/call","params": {"name": "list_files","arguments": {"directory": "./", "pattern": "**/*.py"}}}
 ```
+
+## Calling search_code tool (SWE)
+```json
+{"jsonrpc": "2.0","id": 2,"method": "tools/call","params": {"name": "search_code","arguments": {"pattern": "Input", "file_pattern": "**/mbpp_task.py"}}}
+```
