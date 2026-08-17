@@ -11,6 +11,7 @@ the REPL (no task) or a single task run.
 """
 
 import argparse
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -21,6 +22,7 @@ from docker.errors import DockerException
 from sandbox import repl
 from sandbox.config import SandboxConfig
 from sandbox.container import SandboxContainer
+from sandbox.mcp_bridge import MCPBridge
 
 PROG_NAME = "sandbox"
 PROG_DESCRIPTION = "Secure sandbox for LLM-generated code execution."
@@ -85,13 +87,21 @@ def main() -> None:
         print(f"error: invalid sandbox config:\n{e}", file=sys.stderr)
         sys.exit(1)
 
+    mcp_bridge = None
+    if args.mcp_stdio is not None or args.mcp_server is not None:
+        mcp_bridge = MCPBridge(
+            stdio_command=args.mcp_stdio, server_url=args.mcp_server
+        )
     try:
         container = SandboxContainer(
             config,
             image=DEFAULT_SANDBOX_IMAGE,
             build_context=SANDBOX_BUILD_CONTEXT,
         )
-        with container as c:
+        with contextlib.ExitStack() as stack:
+            if mcp_bridge is not None:
+                stack.enter_context(mcp_bridge)
+            c = stack.enter_context(container)
             repl.run(c)
     except DockerException as e:
         print(f"error: could not reach Docker: {e}", file=sys.stderr)

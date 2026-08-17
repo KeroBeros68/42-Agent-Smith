@@ -182,9 +182,20 @@ class SandboxContainer:
         payload_size = int.from_bytes(header[4:FRAME_HEADER_SIZE], "big")
         return header[0], _recv_exactly(self._socket._sock, payload_size)
 
+    @property
+    def stderr(self) -> str:
+        return self._stderr_buffer.decode("utf-8", errors="replace")
+
     def receive(self) -> dict[str, Any]:
         while b"\n" not in self._recv_buffer:
-            stream_type, payload = self._read_frame()
+            try:
+                stream_type, payload = self._read_frame()
+            except ConnectionError as e:
+                if self._stderr_buffer:
+                    raise ConnectionError(
+                        f"{e}\nContainer stderr:\n{self.stderr}"
+                    ) from None
+                raise
             if stream_type == STREAM_STDOUT:
                 self._recv_buffer += payload
             else:
@@ -206,6 +217,13 @@ class SandboxContainer:
                     self._container.remove(force=True)
                 finally:
                     self._container = None
+                    if self._runtime_image is not None:
+                        try:
+                            self._client.images.remove(
+                                self._runtime_image, force=True
+                            )
+                        finally:
+                            self._runtime_image = None
 
     def __enter__(self) -> "SandboxContainer":
         self.start()

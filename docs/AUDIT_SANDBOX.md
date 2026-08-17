@@ -29,8 +29,7 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 
 ### ❌ Mauvais
 
-1. **`--mcp-stdio` / `--mcp-server` sont parsés puis totalement ignorés.** `args.mcp_stdio` et `args.mcp_server` ne sont lus nulle part dans `main()`. Concrètement, les 3 commandes du sujet qui incluent un flag MCP se comportent **exactement** comme `uv run sandbox` nu : aucun serveur connecté, aucun outil dans le namespace. C'est l'écart de conformité le plus large du fichier, et il touche une exigence dure (§V.2.5 : « Both stdio or streamable HTTP transports must be supported »).
-2. **Le docstring ment sur le comportement** : « either the REPL (no task) or a single task run » — il n'y a aucun argument de tâche dans le parser, et `main()` lance inconditionnellement le REPL. En soutenance, un docstring qui décrit une capacité absente est plus coûteux qu'un docstring vide.
+1. **Le docstring ment sur le comportement** : « either the REPL (no task) or a single task run » — il n'y a aucun argument de tâche dans le parser, et `main()` lance inconditionnellement le REPL. En soutenance, un docstring qui décrit une capacité absente est plus coûteux qu'un docstring vide.
 
 ---
 
@@ -62,8 +61,7 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 
 ### ❌ Mauvais
 
-1. **`_stderr_buffer` est rempli mais jamais lu.** Les tracebacks du conteneur sont désormais capturées, mais rien ne les remonte à l'utilisateur ni à la boucle agent. En l'état, un crash de `runner.py` se manifeste par un `ConnectionError` opaque alors que la cause exacte est disponible dans le buffer — exactement le « silent failure » que §V.1.3 interdit.
-2. **La tag de l'image dérivée (`sandbox-executor:<hash(base_image)>`) n'est jamais nettoyée.** Chaque base image distincte accumule une image dans le cache Docker local, jamais supprimée par `stop()`. Bénin en local, moins en CI si le disque est contraint.
+Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial » pour l'historique.
 
 ---
 
@@ -103,7 +101,7 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 
 | Exigence | État |
 |---|---|
-| CLI `uv run sandbox` (4 formes) | 🟡 Parse tout, n'utilise que 2 formes sur 4 |
+| CLI `uv run sandbox` (4 formes) | ✅ Les 4 formes fonctionnent, testé de bout en bout (`--mcp-stdio` contre le vrai `mcp_tools_mbpp.py`) |
 | REPL interactif | 🟡 Boucle, sorties, multi-ligne et Ctrl+C OK ; affichage brut, `final_answer` non traité |
 | `final_answer` injecté | ❌ Absent |
 | `KeyboardInterrupt`/`SystemExit` propagées | ✅ Structurellement garanti par `__exit__` |
@@ -113,7 +111,7 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 | Timeout d'exécution | ❌ Stub |
 | Limite mémoire | ✅ `mem_limit` |
 | Builtins restreints | ❌ Stub |
-| Intégration MCP (stdio + HTTP) | ❌ Stub, flags CLI ignorés |
+| Intégration MCP (stdio + HTTP) | 🟡 Connexion réelle + découverte des tools fonctionnelles (`MCPBridge`, testé contre `mcp_tools_mbpp.py`) ; aucun relais `tool_call` vers le conteneur (dépend de `protocol.py`/`runner.py`), transport HTTP non testé en réel |
 | Manuel dynamique | ❌ Stub |
 | Config Pydantic + JSON | ✅ Fait, défauts à réaligner |
 
@@ -123,10 +121,8 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 
 Par ordre d'impact sur la note :
 
-1. **Écrire `executor/runner.py`** — sans lui, rien ne tourne (cf. préambule)
-2. **Brancher les flags MCP ignorés dans `cli.py`** (§V.2.5, exigence dure)
-3. **Implémenter `restrictions.py`** — c'est là que se jouent 3 des 6 contraintes de sécurité, et `exam_sandbox.sh` exige **100 %** de réussite (§VI.2). Doit notamment interpréter le matching wildcard (`"math.*"`) déjà présent dans `AUTHORIZED_IMPORTS`, sinon ces entrées ne servent à rien.
-4. **Robustesse** : exploitation de `_stderr_buffer`, nettoyage de l'image dérivée `sandbox-executor:*`
+1. **Écrire `executor/runner.py`** — sans lui, rien ne tourne (cf. préambule). Doit maintenant aussi lire `protocol.py` pour relayer les `tool_call` vers `MCPBridge` (connexion déjà fonctionnelle côté host, personne ne l'utilise encore côté conteneur)
+2. **Implémenter `restrictions.py`** — c'est là que se jouent 3 des 6 contraintes de sécurité, et `exam_sandbox.sh` exige **100 %** de réussite (§VI.2). Doit notamment interpréter le matching wildcard (`"math.*"`) déjà présent dans `AUTHORIZED_IMPORTS`, sinon ces entrées ne servent à rien.
 
 ---
 
@@ -156,3 +152,6 @@ Par ordre d'impact sur la note :
 | `KeyboardInterrupt` non gérée dans le REPL → traceback à l'écran au lieu d'annuler la ligne en cours | `repl.py` | Ctrl+C réinitialise le buffer et redonne le prompt `>>>` (comportement REPL standard) ; seul Ctrl+D (EOF) quitte, inchangé | 2026-08-14 |
 | REPL limité à une ligne — impossible de saisir `def`/`for`/`try` multi-ligne | `repl.py` | `_read_block()` accumule les lignes et utilise `codeop.compile_command()` (le module stdlib du vrai REPL Python) pour détecter bloc incomplet (prompt `...`) vs complet vs syntaxe invalide ; comportement vérifié manuellement contre plusieurs cas (`def` seul, `def`+corps, `def`+corps+ligne vide, syntaxe invalide) | 2026-08-14 |
 | `ConnectionError`/`TimeoutError` de `send`/`receive` non capturées dans le REPL — traceback si le conteneur meurt ou se fige | `repl.py` | `try/except (ConnectionError, TimeoutError)` autour de `send`/`receive`, message + sortie propre de la boucle. Note mineure non bloquante : le message affiché ("Connection to container lost.") est un peu imprécis pour le cas timeout (conteneur figé, pas forcément déconnecté) | 2026-08-14 |
+| `_stderr_buffer` rempli mais jamais lu — crash de `runner.py` se manifestait par un `ConnectionError` opaque | `container.py` | Propriété `stderr` ajoutée ; `receive()` enrichit le `ConnectionError` avec le contenu de `_stderr_buffer` s'il y en a. Testé de bout en bout (build + start + échec attendu) : le chemin ne casse rien même quand le buffer est vide (fallback sur le message original) | 2026-08-14 |
+| Image dérivée `sandbox-executor:<hash>` jamais nettoyée, accumulation dans le cache Docker local | `container.py` | Supprimée dans `stop()` (`images.remove(force=True)`) après le conteneur, dans le même enchaînement `try/finally` par étape ; vérifié par un test réel — plus aucune image `sandbox-executor:*` après le `with`, l'image de base reste (réutilisation voulue entre sessions) | 2026-08-14 |
+| `--mcp-stdio`/`--mcp-server` parsés puis totalement ignorés (§V.2.5, exigence dure) | `cli.py`, `mcp_bridge.py` (nouveau) | `MCPBridge` : facade synchrone sur `fastmcp.Client` (async), pont via thread + event loop dédiée (`_run()` seul point de passage sync→async), connexion stdio (`shlex.split` + `StdioTransport`) ou HTTP (URL passée telle quelle, transport inféré par `fastmcp`). Branché dans `cli.py` via `contextlib.ExitStack` (nettoyage garanti, avec ou sans flag MCP). Testé de bout en bout contre le vrai `mcp_tools_mbpp.py` : connexion stdio réelle, `list_tools()` découvre bien `run_tests`, cleanup confirmé. Le relais `tool_call` conteneur→bridge n'existe pas encore (dépend de `runner.py`/`protocol.py`) | 2026-08-14 |
