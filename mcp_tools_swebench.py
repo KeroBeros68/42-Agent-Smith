@@ -163,6 +163,12 @@ def search_code(pattern: str, file_pattern: str = "*") -> str:
 
 
 if __name__ == "__main__":
-    # Listen to input
-    # REPLACE THIS STRING TO 'http' TO USE HTTP INSTEAD OF STDIO
-    mcp.run(transport="stdio")
+    # Get transport mode from env variable MCP_TRANSPORT
+    transport_mode = os.environ.get("MCP_TRANSPORT", "null")
+
+    # Verify transport mode
+    if transport_mode != 'http' and transport_mode != 'stdio':
+        raise TypeError(f'Wrong transport mode ("{transport_mode}") provided in the env variable "MCP_TRANSPORT".')
+
+    # Listen
+    mcp.run(transport=transport_mode)

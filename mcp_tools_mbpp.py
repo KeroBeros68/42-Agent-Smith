@@ -72,6 +72,9 @@ def run_tests(code: str) -> str:
             " this is a server-side error."
         )
 
+    if len(TASK.test_list) == 0:
+        return "There are no available tests for this task. You may skip testing."
+
     imports = "\n".join(TASK.test_imports)
 
     # First, check if the syntax is correct
@@ -91,7 +94,7 @@ def run_tests(code: str) -> str:
         try:
             proc = subprocess.run(
                 [sys.executable, "-c", f"{imports}\n\n{code}\n\n{test}"],
-                timeout=TIMEOUT_DELAY_SEC,
+                timeout=TIMEOUT_DELAY_SEC * len(TASK.test_list),
                 input="",
                 capture_output=True,
                 text=True,
@@ -108,6 +111,12 @@ def run_tests(code: str) -> str:
 
 
 if __name__ == "__main__":
-    # Listen to input
-    # REPLACE THIS STRING TO 'http' TO USE HTTP INSTEAD OF STDIO
-    mcp.run(transport="stdio")
+    # Get transport mode from env variable MCP_TRANSPORT
+    transport_mode = os.environ.get("MCP_TRANSPORT", "null")
+
+    # Verify transport mode
+    if transport_mode != 'http' and transport_mode != 'stdio':
+        raise TypeError(f'Wrong transport mode ("{transport_mode}") provided in the env variable "MCP_TRANSPORT".')
+
+    # Listen
+    mcp.run(transport=transport_mode)
