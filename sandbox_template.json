@@ -16,6 +16,7 @@
         "datetime.*",
         "time",
         "json",
+        "json.*",
         "typing",
         "typing.*",
         "copy",

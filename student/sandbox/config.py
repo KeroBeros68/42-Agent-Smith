@@ -24,6 +24,7 @@ AUTHORIZED_IMPORTS = [
     "datetime.*",
     "time",
     "json",
+    "json.*",
     "typing",
     "typing.*",
     "copy",

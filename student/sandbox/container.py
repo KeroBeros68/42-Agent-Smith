@@ -158,7 +158,10 @@ class SandboxContainer:
             security_opt=["no-new-privileges"],
             read_only=True,
             tmpfs=TMPFS_MOUNTS,
-            pids_limit=self._config.pids_limit
+            pids_limit=self._config.pids_limit,
+            environment={
+                "SANDBOX_CONFIG_JSON": self._config.model_dump_json()
+            },
         )
         container.start()
         self._container = container

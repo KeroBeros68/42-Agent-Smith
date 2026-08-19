@@ -3,17 +3,17 @@
 > Audit de conformité de la partie sandbox réalisée à ce jour, par rapport au sujet officiel (`subject-1-1.txt`, v1.1) et au `CAHIER_DES_CHARGES.md`.
 >
 > **Date de l'audit** : 2026-08-13
-> **Dernière mise à jour** : 2026-08-14 — points corrigés retirés (voir « Corrigés depuis l'audit initial » en fin de document)
+> **Dernière mise à jour** : 2026-08-18 — points corrigés retirés (voir « Corrigés depuis l'audit initial » en fin de document)
 > **Périmètre** : `student/sandbox/` (fichiers implémentés uniquement) + `sandbox_template.json`
 > **Méthode** : 5 points positifs max et 5 points négatifs max par fichier, chacun justifié par référence au sujet ou par le comportement réel du code.
 
 ---
 
-## ⚠️ Préambule : l'état actuel ne peut pas tourner de bout en bout
+## ✅ Mise à jour : le round-trip de bout en bout fonctionne
 
-`container.py:69` lance `python3 /sandbox_executor/runner.py`, mais `runner.py` ne contient qu'un docstring. Le conteneur démarre, exécute un script vide, **se termine immédiatement**. `attach_socket()` s'attache donc à un conteneur mort, et le premier `receive()` lèvera `ConnectionError`.
+`runner.py` a été écrit (version minimale : `exec`/`result`/`error`, sans restrictions ni watchdog). Testé en conditions réelles à plusieurs reprises — REPL → conteneur → `compile()`/`exec()` → réponse structurée → remontée par le socket (y compris un vrai cas d'erreur de syntaxe intercepté correctement). La connexion MCP (`MCPBridge`) a aussi été testée de bout en bout contre le vrai `mcp_tools_mbpp.py`.
 
-Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mis le transport avant l'exécuteur. À garder en tête : **rien de ce qui suit n'a encore été validé par une exécution réelle**.
+Ce qui reste non branché : les restrictions (`restrictions.py` est écrit et testé **en isolation**, mais `runner.py` ne l'appelle pas encore — voir la section dédiée plus bas), le `watchdog.py` (timeout par exécution), et le relais `tool_call` conteneur↔`MCPBridge`.
 
 ---
 
@@ -45,7 +45,7 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 
 ### ❌ Mauvais
 
-1. **Les wildcards sont dans la liste, mais rien ne les interprète encore.** `"math.*"`, `"collections.*"`, `"datetime.*"`, `"typing.*"` sont désormais présents comme chaînes littérales dans `AUTHORIZED_IMPORTS` — mais `restrictions.py` (le fichier qui doit s'en servir) est encore un stub vide. Tant qu'il n'implémente pas le matching par motif, ces entrées ne valent qu'un match exact sur la chaîne `"math.*"`, ce qui n'autorise `import` d'aucun vrai module. Le format est choisi, le comportement ne l'est pas encore.
+Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial » pour l'historique.
 
 ---
 
@@ -62,6 +62,40 @@ Ce n'est pas un défaut de conception — c'est l'ordre de construction qui a mi
 ### ❌ Mauvais
 
 Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial » pour l'historique.
+
+---
+
+## `executor/runner.py`
+
+### ✅ Bon
+
+1. **Round-trip complet vérifié en conditions réelles**, pas juste supposé — REPL/appels directs → conteneur Docker → `compile`/`exec` → réponse structurée → socket → host, testé plusieurs fois avec de vrais conteneurs (erreur de syntaxe, imports autorisés/refusés, persistance du namespace).
+2. **`compile(code, "<sandbox>", "exec")`** — accepte plusieurs statements top-level en un seul message, après correction d'un bug trouvé par test (`"single"` rejetait tout bloc de plus d'un statement, ce qui aurait cassé n'importe quel code multi-lignes envoyé par la future boucle agent).
+3. **`NAMESPACE` persistant confirmé fonctionnellement**, pas juste par lecture de code — testé `x = 10` puis `print(x * 2)` dans deux messages séparés, résultat `20`.
+4. **`redirect_stdout` isole la sortie du code exécuté du canal protocole** — un `print()` dans le code utilisateur ne pollue jamais le flux JSON Lines que `container.py` essaie de parser.
+5. **`except Exception`, pas `except BaseException`** — `SystemExit`/`KeyboardInterrupt` ne sont pas capturées, elles se propagent et terminent le conteneur plutôt que d'être avalées comme une erreur d'exécution ordinaire. Conforme à §V.2.2 : un `exit()` ou une interruption dans le code sandboxé doit se voir, pas être traité comme "juste une erreur de plus".
+
+### ❌ Mauvais
+
+1. **Pas de watchdog** — un `exec` qui boucle à l'infini bloque `runner.py` indéfiniment, aucune limite de temps par exécution.
+2. **`final_answer` et les stubs d'outils MCP ne sont pas injectés dans `NAMESPACE`** — la connexion MCP fonctionne côté host (`MCPBridge`), mais rien ne relaie encore un `tool_call` depuis le conteneur, et rien ne signale la fin de tâche autrement qu'en quittant le REPL.
+
+---
+
+## `executor/restrictions.py`
+
+### ✅ Bon
+
+1. **Hook `sys.meta_path` plutôt que du pattern-matching sur le texte du code.** Un `MetaPathFinder` intercepte *tout* mécanisme d'import (`import X`, `from X import Y`, `__import__("X")`, `importlib.import_module("X")`) au niveau de l'interpréteur — contourne les techniques de bypass triviales qu'une simple recherche de sous-chaîne (`"os" in code`) laisserait passer (alias, imports dynamiques, espaces superflus).
+2. **Purge de `sys.modules["os"]` ciblée et vérifiée empiriquement**, pas un balayage aveugle de tout `sys.modules`. Testé avant d'écrire le code : `os` est le seul module dangereux réellement pré-chargé au démarrage de l'interpréteur (avant même l'exécution de `runner.py`) — un `meta_path` seul ne l'aurait jamais intercepté puisque Python consulte `sys.modules` avant `sys.meta_path`.
+3. **Pré-import de tous les modules autorisés avant d'activer la restriction.** Corrige un problème réel découvert par test : `random` (a besoin de `os.urandom` en interne), `json` (sous-modules `.decoder`/`.encoder`), `string` (`_string`), `copy` (`weakref`) échouaient tous à l'import sans ce mécanisme — résolu une fois pour toutes plutôt qu'au cas par cas avec des wildcards manuels.
+4. **`find_spec` lève `ImportError` explicitement pour un import refusé**, au lieu de `return None` — un refus net immédiatement, pas une recherche qui continue silencieusement ailleurs dans les autres finders.
+5. **Testé contre de vraies tentatives de contournement** (`__import__`, `importlib.import_module`, `from X import Y`) et vérifié fonctionnellement, pas juste syntaxiquement (`random.randint()` appelé en vrai après import, pas seulement "l'import ne lève pas"). Depuis, aussi vérifié **en conditions réelles dans un vrai conteneur Docker** (pas seulement en process isolé) : `os`/`subprocess` bloqués, `math`/`random` utilisables normalement.
+
+### ❌ Mauvais
+
+1. **Pas de restriction des builtins.** Le docstring du fichier couvre les deux volets (« Import allowlist **and** restricted builtins enforcement »), mais seul le premier est fait. `open`, `eval`, `exec` (le vrai, pas celui de `runner.py`) restent accessibles tels quels dans le namespace d'exécution.
+2. **`PRELOADED_DANGEROUS_MODULES = ("os",)` est une liste figée**, basée sur une vérification empirique faite sur cette machine/cette image de base précise. Si l'image Docker change (autre variante `python:3.10-slim`, autre OS de base), un autre module dangereux pourrait se retrouver pré-chargé sans qu'on l'ait revérifié.
 
 ---
 
@@ -105,13 +139,13 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 | REPL interactif | 🟡 Boucle, sorties, multi-ligne et Ctrl+C OK ; affichage brut, `final_answer` non traité |
 | `final_answer` injecté | ❌ Absent |
 | `KeyboardInterrupt`/`SystemExit` propagées | ✅ Structurellement garanti par `__exit__` |
-| Restriction imports | ❌ Stub |
+| Restriction imports | ✅ Branché et vérifié en conditions réelles (Docker) |
 | Restriction filesystem | 🟡 Racine en read-only + tmpfs (Docker) ; l'allowlist `allowed_directories` reste à appliquer dans `restrictions.py` |
 | Pas de réseau | ✅ `network_mode="none"` |
 | Timeout d'exécution | ❌ Stub |
 | Limite mémoire | ✅ `mem_limit` |
 | Builtins restreints | ❌ Stub |
-| Intégration MCP (stdio + HTTP) | 🟡 Connexion réelle + découverte des tools fonctionnelles (`MCPBridge`, testé contre `mcp_tools_mbpp.py`) ; aucun relais `tool_call` vers le conteneur (dépend de `protocol.py`/`runner.py`), transport HTTP non testé en réel |
+| Intégration MCP (stdio + HTTP) | 🟡 Connexion réelle + découverte des tools fonctionnelles (`MCPBridge`, testé contre `mcp_tools_mbpp.py`) ; `protocol.py` définit le message `tool_call` mais `runner.py` ne l'émet pas encore, transport HTTP non testé en réel |
 | Manuel dynamique | ❌ Stub |
 | Config Pydantic + JSON | ✅ Fait, défauts à réaligner |
 
@@ -121,8 +155,9 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 
 Par ordre d'impact sur la note :
 
-1. **Écrire `executor/runner.py`** — sans lui, rien ne tourne (cf. préambule). Doit maintenant aussi lire `protocol.py` pour relayer les `tool_call` vers `MCPBridge` (connexion déjà fonctionnelle côté host, personne ne l'utilise encore côté conteneur)
-2. **Implémenter `restrictions.py`** — c'est là que se jouent 3 des 6 contraintes de sécurité, et `exam_sandbox.sh` exige **100 %** de réussite (§VI.2). Doit notamment interpréter le matching wildcard (`"math.*"`) déjà présent dans `AUTHORIZED_IMPORTS`, sinon ces entrées ne servent à rien.
+1. **Écrire `watchdog.py`** — timeout par exécution, dernière des 6 contraintes de sécurité pas encore couverte (`exam_sandbox.sh` exige **100 %**, §VI.2)
+2. **Restreindre les builtins** (`open`, `eval`, `exec`...) — deuxième volet de `restrictions.py`, pas encore fait
+3. **Relayer les `tool_call`** conteneur → `MCPBridge` et injecter `final_answer`/les stubs d'outils dans `NAMESPACE` — la connexion MCP fonctionne déjà côté host, mais `runner.py` ne sait pas encore émettre ce type de message ni attendre sa réponse
 
 ---
 
@@ -155,3 +190,8 @@ Par ordre d'impact sur la note :
 | `_stderr_buffer` rempli mais jamais lu — crash de `runner.py` se manifestait par un `ConnectionError` opaque | `container.py` | Propriété `stderr` ajoutée ; `receive()` enrichit le `ConnectionError` avec le contenu de `_stderr_buffer` s'il y en a. Testé de bout en bout (build + start + échec attendu) : le chemin ne casse rien même quand le buffer est vide (fallback sur le message original) | 2026-08-14 |
 | Image dérivée `sandbox-executor:<hash>` jamais nettoyée, accumulation dans le cache Docker local | `container.py` | Supprimée dans `stop()` (`images.remove(force=True)`) après le conteneur, dans le même enchaînement `try/finally` par étape ; vérifié par un test réel — plus aucune image `sandbox-executor:*` après le `with`, l'image de base reste (réutilisation voulue entre sessions) | 2026-08-14 |
 | `--mcp-stdio`/`--mcp-server` parsés puis totalement ignorés (§V.2.5, exigence dure) | `cli.py`, `mcp_bridge.py` (nouveau) | `MCPBridge` : facade synchrone sur `fastmcp.Client` (async), pont via thread + event loop dédiée (`_run()` seul point de passage sync→async), connexion stdio (`shlex.split` + `StdioTransport`) ou HTTP (URL passée telle quelle, transport inféré par `fastmcp`). Branché dans `cli.py` via `contextlib.ExitStack` (nettoyage garanti, avec ou sans flag MCP). Testé de bout en bout contre le vrai `mcp_tools_mbpp.py` : connexion stdio réelle, `list_tools()` découvre bien `run_tests`, cleanup confirmé. Le relais `tool_call` conteneur→bridge n'existe pas encore (dépend de `runner.py`/`protocol.py`) | 2026-08-14 |
+| `runner.py` vide — rien ne tournait de bout en bout | `executor/protocol.py` (nouveau), `executor/runner.py` (nouveau) | `protocol.py` : `TypedDict` pour chaque type de message (`exec`, `result`, `error`, `tool_call`, `tool_result`, `final_answer`). `runner.py` (version minimale, sans restrictions ni watchdog) : `NAMESPACE` persistant, `compile(..., "single")` + `redirect_stdout` pour capturer la sortie et auto-afficher les expressions comme un vrai REPL, `sys.stdout.flush()` explicite (stdout bufferisé sans tty). Testé en conditions réelles (REPL manuel, y compris un cas d'erreur de syntaxe) | 2026-08-17 |
+| Aucune restriction d'imports — code exécuté sans limite | `executor/restrictions.py` (nouveau) | Hook `sys.meta_path` (intercepte `import`/`from`/`__import__`/`importlib.import_module`, pas de pattern-matching texte contournable) + purge ciblée de `os` (seul module dangereux pré-chargé au démarrage, vérifié empiriquement) + pré-import de tous les modules autorisés avant activation (corrige un bug réel trouvé par test : `random`/`json`/`string`/`copy` cassaient sans ça). Testé contre de vraies tentatives de contournement et fonctionnellement (`random.randint()` produit un résultat) | 2026-08-18 |
+| `restrictions.install()` écrit mais jamais appelé — `runner.py` n'avait aucun moyen de recevoir `SandboxConfig` | `container.py`, `executor/runner.py` | Toute la `SandboxConfig` sérialisée en JSON dans la variable d'env `SANDBOX_CONFIG_JSON` posée à la création du conteneur (`model_dump_json()`), lue côté `runner.py` **avant** l'appel à `restrictions.install()` (le `import os` nécessaire pour lire `os.environ` a lieu avant la purge de `os`, même principe que le pré-import). Un seul passage réutilisable pour `watchdog.py` plus tard (même variable, autres champs). Vérifié en conditions réelles Docker | 2026-08-18 |
+| `compile(code, "<sandbox>", "single")` dans `runner.py` rejetait tout message de plus d'un statement (`SyntaxError: multiple statements found`) — aurait cassé tout code multi-lignes envoyé par la future boucle agent | `executor/runner.py` | Mode changé en `"exec"` (accepte plusieurs statements, perd l'auto-affichage REPL d'une expression isolée — acceptable, un LLM utilise `print()` explicitement). Trouvé et corrigé grâce au test Docker réel avec `import math\nprint(math.sqrt(16))`, pas en théorie | 2026-08-18 |
+| Message protocole malformé (JSON invalide, `"type"` absent) faisait planter tout `runner.py` — le `except Exception` référençait `message["type"]`, qui plantait à son tour si `message` n'existait pas encore | `executor/runner.py` | `try/except/else` : `json.JSONDecodeError` capturée spécifiquement (pas `Exception`), `message.get("type")` au lieu de `message["type"]` (plus de `KeyError` possible), messages d'erreur reflétant la vraie cause. Testé en conditions réelles Docker : JSON invalide, type inconnu, champ `type` absent — les trois renvoient une `ErrorMessage` claire et la session survit (un `exec` normal juste après fonctionne toujours) | 2026-08-18 |
