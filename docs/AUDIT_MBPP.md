@@ -4,6 +4,7 @@
 >
 > **Date de l'audit** : 2026-08-16
 > **Dernière révision** : 2026-08-16 — reflet de l'état du dépôt après les commits SWE-bench (`agent_core/` construit, `sandbox/` câblé, MCP SWE-Bench ajouté).
+> **Correction du 2026-08-20** : la priorité n°1 (build du wheel cassé) était factuellement inexacte — `uv build --wheel` réussit réellement (vérifié) ; les répertoires `agent_mbpp`/`agent_swebench` existent mais sont vides, ils n'ont pas disparu. Corrigé au préambule, au récapitulatif et en priorités ; le reste du document (points ✅/❌ sur `mcp_tools_mbpp.py`, `data_models/`) reste vérifié et à jour à cette date. Ce document ne couvre pas `agent_core/provider/` (créé le 18/08) ni l'état final du sandbox (relais `tool_call`, watchdog, builtins restreints, tous terminés après le 16/08) — voir `AUDIT_AGENT_CORE.md` et `AUDIT_SANDBOX.md` pour ces parties.
 > **Périmètre** : `mcp_tools_mbpp.py` (§V.3.2), `student/data_models/` (§V.3.3), `student/agent_core/` et `student/sandbox/` (§IV, §V.2)
 > **Méthode** : 5 points positifs max et 5 points négatifs max par fichier, chacun justifié par référence au sujet **ou par un comportement observé** — chaque affirmation marquée « vérifié » a été reproduite en lançant réellement le serveur MCP en stdio et en lui envoyant du JSON-RPC.
 
@@ -11,7 +12,7 @@
 
 ## ⚠️ Préambule : deux constats structurants (évolution depuis le 14/08)
 
-**1. `student/agent_mbpp/` n'existe plus — et `pyproject.toml` le déclare toujours comme package.** La branche a remplacé les deux répertoires vides par un `student/agent_core/` partagé (loop, parsing, sandbox_client, manual, providers), mais tous ces fichiers restent des docstrings-squelettes : `loop.py` n'a toujours aucun corps exécutable, aucun `__main__.py` n'existe nulle part, et les trois commandes du §V.3.1 ne s'exécutent toujours pas. Pire qu'au 14/08 : `pyproject.toml:32-33` déclare `student/agent_mbpp` et `student/agent_swebench` dans `[tool.hatch.build.targets.wheel] packages`, or ces répertoires **n'existent pas sur disque** — la construction du wheel (`pip install .` / `uv build`) échoue sur le paquet absent. La déclaration est passée d'« inerte mais vraie » (répertoire vide) à « fausse » (répertoire disparu).
+**1. `student/agent_mbpp/` et `student/agent_swebench/` sont toujours vides — mais pas absents, et le build ne casse pas.** *(Correction du 2026-08-20 : cette affirmation a été vérifiée et l'était partiellement à tort — voir note en fin de paragraphe.)* Les deux répertoires existent sur disque (juste `.`/`..`, aucun fichier), et `student/agent_core/` partagé (loop, parsing, sandbox_client, manual, providers) a bien été construit à côté, mais tous ces fichiers restent des docstrings-squelettes : `loop.py` n'a toujours aucun corps exécutable, aucun `__main__.py` n'existe nulle part, et les trois commandes du §V.3.1 ne s'exécutent toujours pas. `pyproject.toml` déclare `student/agent_mbpp` et `student/agent_swebench` dans `[tool.hatch.build.targets.wheel] packages` — ces répertoires existent mais sont **vides de code**, ce qui n'est pas la même chose que « n'existent pas sur disque ». Vérifié le 2026-08-20 : `uv build --wheel` **réussit** (`Successfully built dist/student-0.1.0-py3-none-any.whl`) — hatchling ne plante pas sur un package vide, il produit juste un wheel sans module dedans pour ces deux entrées. **Le vrai problème n'est donc pas un build cassé, mais deux packages vides déclarés sans que rien n'y vive** : la condition de recevabilité qui saute n'est pas « `pip install .` échoue », c'est « aucune des commandes CLI du §V.3.1 n'existe », ce qui reste un point bloquant, juste pour une raison différente de celle énoncée initialement.
 
 **2. Le sandbox est construit, mais `run_tests` ne s'en sert pas.** `student/sandbox/` est désormais un vrai bac à sable Docker — `container.py` lance un conteneur `network_mode="none"`, `read_only=True`, `cap_drop=["ALL"]`, `pids_limit`, `mem_limit`, tmpfs sur `/workspace` et `/tmp` ; `executor/restrictions.py` fait une allowlist d'imports stdlib ; `executor/watchdog.py` borne chaque snippet ; `mcp_bridge.py` relaie les `tool_call` du conteneur vers le serveur MCP. C'est exactement l'architecture que §IV.1 et §V.2.5 décrivent.
 
@@ -160,7 +161,7 @@ La tension du §V.2.5 (« MCP tool actions happen outside the sandbox ») justif
 
 | Exigence | Réf. | État |
 |---|---|---|
-| CLI `python -m agent_mbpp` (`--task-file`, `--output`, `--model-name`, `--provider-url`) | §V.3.1 | ❌ Répertoire supprimé + toujours déclaré dans `pyproject.toml` → wheel cassé |
+| CLI `python -m agent_mbpp` (`--task-file`, `--output`, `--model-name`, `--provider-url`) | §V.3.1 | ❌ Package vide (existe sur disque, aucun fichier dedans) — aucune commande du §V.3.1 n'existe |
 | Chargement de tâche + exécution agent | §V.3.1 | ❌ Absent (`agent_core/loop.py` est un docstring) |
 | Outil MCP `run_tests` | §V.3.2 | 🟡 Fonctionne ; `test_list` vide corrigé ; mais faux positif `sys.exit(0)` et feedback pauvre |
 | Ressources et prompts MCP exposés | §V.2.5 | ❌ `resources/list` et `prompts/list` vides (vérifié) |
@@ -172,7 +173,7 @@ La tension du §V.2.5 (« MCP tool actions happen outside the sandbox ») justif
 | `max_iterations` configurable | §V.3.4 | ❌ Absent |
 | Respect des limites cumulées (10 it. / 6 000 / 1 500 / 120 s) | §VI.1.1 | ❌ Aucun mécanisme côté étudiant |
 | Code LLM exécuté dans le sandbox | §IV.1 | ❌ `run_tests` exécute sur l'hôte (vérifié), malgré un sandbox construit |
-| **Build du wheel (`packages` de `pyproject.toml`)** | §VI | ❌ Référence des packages `agent_mbpp`/`agent_swebench` absents |
+| **Build du wheel (`packages` de `pyproject.toml`)** | §VI | ✅ Réussit (vérifié, `uv build --wheel`) — mais produit deux packages vides pour `agent_mbpp`/`agent_swebench` |
 
 ---
 
@@ -180,7 +181,7 @@ La tension du §V.2.5 (« MCP tool actions happen outside the sandbox ») justif
 
 Par ordre d'impact sur la note — **l'ordre a changé depuis le 14/08** :
 
-1. **Réparer la déclaration de packages dans `pyproject.toml`** — retirer `student/agent_mbpp` et `student/agent_swebench` des `packages` (ou les recréer) et résoudre le conflit d'import racine (`student.*` vs `sandbox.*`). Sans ça, `pip install .` échoue et **aucune** des commandes du §V.3 ne peut être évaluée — c'est la condition de recevabilité même.
+1. **Écrire le contenu de `student/agent_mbpp/`** (CLI, chargement de tâche, boucle) — le build du wheel ne casse pas (vérifié), mais le package est vide : aucune des commandes du §V.3.1 n'existe. Résoudre au passage le conflit d'import racine (`student.*` vs `sandbox.*`, cf. point ❌2 plus bas). C'est la condition de recevabilité pour le §V.3, pas un problème de packaging.
 2. **Faire passer l'exécution des tests par le sandbox existant** — réutiliser `SandboxContainer` (`network:none`, allowlist, `mem_limit`) dans `run_tests`, au lieu de `subprocess.run(sys.executable)` sur l'hôte. Le sandbox est construit ; l'écart est maintenant un non-câblage, pas un manque. Sans ce point, un correcteur démontre l'exfiltration en direct.
 3. **Corriger le timeout global** — remplacer `10 × len(test_list)` *par processus* par un budget global (le pire-cas actuel de 10N² s fait déborder le 120 s §VI.1.1 à partir de 3-4 tests).
 4. **Supprimer les faux positifs restants** — preuve d'exécution de l'assertion (contre `sys.exit(0)`). Un faux positif se paie par une tâche entière, et le seuil MBPP est 4/5.
