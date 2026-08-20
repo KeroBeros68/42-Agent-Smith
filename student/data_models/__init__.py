@@ -12,10 +12,10 @@ These mirror the student-facing models defined by the moulinette
 sandbox itself rather than the evaluation contract).
 """
 
-from student.data_models.mbpp_task import MBPPTaskInput
-from student.data_models.solution import SolutionOutput
-from student.data_models.step_metrics import StepMetrics
-from student.data_models.swebench_task import SWEBenchTaskInput
+from data_models.mbpp_task import MBPPTaskInput
+from data_models.solution import SolutionOutput
+from data_models.step_metrics import StepMetrics
+from data_models.swebench_task import SWEBenchTaskInput
 
 __all__ = [
     "MBPPTaskInput",
