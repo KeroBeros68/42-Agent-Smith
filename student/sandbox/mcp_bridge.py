@@ -50,6 +50,13 @@ class MCPBridge:
         raise ValueError("MCPBridge requires stdio_command or server_url")
 
     def _run(self, coro: Any) -> Any:
+        # Found by testing: after close(), the loop is stopped and its
+        # thread joined. run_coroutine_threadsafe() still schedules the
+        # callback without error, but nothing ever runs it again, so
+        # future.result() blocks forever instead of failing fast.
+        if not self._loop.is_running():
+            coro.close()
+            raise ConnectionError("MCPBridge is closed")
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result()
 
@@ -61,11 +68,26 @@ class MCPBridge:
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join()
 
+    def is_connected(self) -> bool:
+        return self._client.is_connected()
+
     def list_tools(self) -> list[Any]:
         return self._run(self._client.list_tools())
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
-        return self._run(self._client.call_tool(name, arguments))
+        # Distinguish a legitimate tool-side error (e.g. the tool's own
+        # exception, correctly propagated) from the server actually being
+        # gone — only the latter gets rewrapped, so a real ToolError still
+        # surfaces with its original message instead of a misleading
+        # "disconnected" report.
+        try:
+            return self._run(self._client.call_tool(name, arguments))
+        except Exception:
+            if not self.is_connected():
+                raise ConnectionError(
+                    f"MCP server disconnected while calling tool {name!r}"
+                ) from None
+            raise
 
     def __enter__(self) -> "MCPBridge":
         self.connect()

@@ -97,11 +97,13 @@ class SandboxContainer:
         config: SandboxConfig,
         image: str,
         build_context: Path | None = None,
+        tools: dict[str, list[str]] | None = None,
     ) -> None:
         self._client = docker.from_env()
         self._config = config
         self._image = image
         self._build_context = build_context
+        self._tools = tools or {}
         self._runtime_image: str | None = None
         self._container: Container | None = None
         self._socket: Any = None
@@ -160,7 +162,8 @@ class SandboxContainer:
             tmpfs=TMPFS_MOUNTS,
             pids_limit=self._config.pids_limit,
             environment={
-                "SANDBOX_CONFIG_JSON": self._config.model_dump_json()
+                "SANDBOX_CONFIG_JSON": self._config.model_dump_json(),
+                "MCP_TOOLS_JSON": json.dumps(self._tools),
             },
         )
         container.start()

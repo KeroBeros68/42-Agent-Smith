@@ -3,17 +3,17 @@
 > Audit de conformité de la partie sandbox réalisée à ce jour, par rapport au sujet officiel (`subject-1-1.txt`, v1.1) et au `CAHIER_DES_CHARGES.md`.
 >
 > **Date de l'audit** : 2026-08-13
-> **Dernière mise à jour** : 2026-08-18 — points corrigés retirés (voir « Corrigés depuis l'audit initial » en fin de document)
+> **Dernière mise à jour** : 2026-08-20 — points corrigés retirés (voir « Corrigés depuis l'audit initial » en fin de document)
 > **Périmètre** : `student/sandbox/` (fichiers implémentés uniquement) + `sandbox_template.json`
 > **Méthode** : 5 points positifs max et 5 points négatifs max par fichier, chacun justifié par référence au sujet ou par le comportement réel du code.
 
 ---
 
-## ✅ Mise à jour : le round-trip de bout en bout fonctionne
+## ✅ Mise à jour : le round-trip complet fonctionne, relais `tool_call` inclus
 
-`runner.py` a été écrit (version minimale : `exec`/`result`/`error`, sans restrictions ni watchdog). Testé en conditions réelles à plusieurs reprises — REPL → conteneur → `compile()`/`exec()` → réponse structurée → remontée par le socket (y compris un vrai cas d'erreur de syntaxe intercepté correctement). La connexion MCP (`MCPBridge`) a aussi été testée de bout en bout contre le vrai `mcp_tools_mbpp.py`.
+Le sandbox est maintenant fonctionnel de bout en bout, sécurité comprise : `exec`/`result`/`error`/`final_answer`, restrictions d'imports, builtins restreints, timeout par exécution, **et** le relais `tool_call` conteneur ↔ `MCPBridge` ↔ vrai serveur MCP. Tout a été vérifié en conditions Docker réelles, pas seulement en théorie — y compris 3 bugs non triviaux trouvés uniquement grâce à ces tests (mapping des arguments positionnels d'un tool, timeout local qui comptait à tort le temps d'attente réseau, et un `redirect_stdout` qui avalait silencieusement le message protocole du stub — voir « Corrigés » en fin de document pour le détail de chacun).
 
-Ce qui reste non branché : les restrictions (`restrictions.py` est écrit et testé **en isolation**, mais `runner.py` ne l'appelle pas encore — voir la section dédiée plus bas), le `watchdog.py` (timeout par exécution), et le relais `tool_call` conteneur↔`MCPBridge`.
+Ce qui reste : le transport MCP HTTP (seul stdio a été testé en réel), l'affichage brut du REPL, et quelques points mineurs listés par fichier ci-dessous.
 
 ---
 
@@ -29,7 +29,7 @@ Ce qui reste non branché : les restrictions (`restrictions.py` est écrit et te
 
 ### ❌ Mauvais
 
-1. **Le docstring ment sur le comportement** : « either the REPL (no task) or a single task run » — il n'y a aucun argument de tâche dans le parser, et `main()` lance inconditionnellement le REPL. En soutenance, un docstring qui décrit une capacité absente est plus coûteux qu'un docstring vide.
+Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial » pour l'historique.
 
 ---
 
@@ -77,8 +77,7 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 
 ### ❌ Mauvais
 
-1. **Pas de watchdog** — un `exec` qui boucle à l'infini bloque `runner.py` indéfiniment, aucune limite de temps par exécution.
-2. **`final_answer` et les stubs d'outils MCP ne sont pas injectés dans `NAMESPACE`** — la connexion MCP fonctionne côté host (`MCPBridge`), mais rien ne relaie encore un `tool_call` depuis le conteneur, et rien ne signale la fin de tâche autrement qu'en quittant le REPL.
+Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial » pour l'historique.
 
 ---
 
@@ -90,12 +89,61 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 2. **Purge de `sys.modules["os"]` ciblée et vérifiée empiriquement**, pas un balayage aveugle de tout `sys.modules`. Testé avant d'écrire le code : `os` est le seul module dangereux réellement pré-chargé au démarrage de l'interpréteur (avant même l'exécution de `runner.py`) — un `meta_path` seul ne l'aurait jamais intercepté puisque Python consulte `sys.modules` avant `sys.meta_path`.
 3. **Pré-import de tous les modules autorisés avant d'activer la restriction.** Corrige un problème réel découvert par test : `random` (a besoin de `os.urandom` en interne), `json` (sous-modules `.decoder`/`.encoder`), `string` (`_string`), `copy` (`weakref`) échouaient tous à l'import sans ce mécanisme — résolu une fois pour toutes plutôt qu'au cas par cas avec des wildcards manuels.
 4. **`find_spec` lève `ImportError` explicitement pour un import refusé**, au lieu de `return None` — un refus net immédiatement, pas une recherche qui continue silencieusement ailleurs dans les autres finders.
-5. **Testé contre de vraies tentatives de contournement** (`__import__`, `importlib.import_module`, `from X import Y`) et vérifié fonctionnellement, pas juste syntaxiquement (`random.randint()` appelé en vrai après import, pas seulement "l'import ne lève pas"). Depuis, aussi vérifié **en conditions réelles dans un vrai conteneur Docker** (pas seulement en process isolé) : `os`/`subprocess` bloqués, `math`/`random` utilisables normalement.
+5. **Testé contre de vraies tentatives de contournement** (`__import__`, `importlib.import_module`, `from X import Y`, traversée de chemin `../`, collision de préfixe `/workspace-evil`) et vérifié fonctionnellement, pas juste syntaxiquement (`random.randint()` appelé en vrai, écriture/lecture réelles dans `/workspace`). Vérifié **en conditions réelles dans un vrai conteneur Docker** : `os`/`subprocess` bloqués, `math`/`random` utilisables normalement, `eval`/`exec`/`input` bloqués, `open` **restreint** à `allowed_directories` (pas banni — sinon ce champ de `SandboxConfig` n'aurait plus de sens) via `os.path.realpath()` pour résister aux `..` et aux symlinks, classe+méthode/`try-except`/comprehension toujours fonctionnels.
 
 ### ❌ Mauvais
 
-1. **Pas de restriction des builtins.** Le docstring du fichier couvre les deux volets (« Import allowlist **and** restricted builtins enforcement »), mais seul le premier est fait. `open`, `eval`, `exec` (le vrai, pas celui de `runner.py`) restent accessibles tels quels dans le namespace d'exécution.
+1. **Limite documentée, pas fermée : l'introspection objet contourne l'allowlist des builtins.** `().__class__.__bases__[0].__subclasses__()` et variantes permettent d'atteindre des classes déjà chargées en mémoire (potentiellement une référence à `os`/`subprocess` détenue par un autre module) sans jamais appeler `import` ni aucun nom retiré de `SAFE_BUILTINS`. Fermer ça demanderait une vraie sandbox AST — explicitement interdite par le sujet (pas de `RestrictedPython`). Docker (réseau none, filesystem read-only, capabilities droppées) reste la vraie frontière de sécurité ; ce fichier est une couche de défense en profondeur par-dessus, pas la seule ligne de défense.
 2. **`PRELOADED_DANGEROUS_MODULES = ("os",)` est une liste figée**, basée sur une vérification empirique faite sur cette machine/cette image de base précise. Si l'image Docker change (autre variante `python:3.10-slim`, autre OS de base), un autre module dangereux pourrait se retrouver pré-chargé sans qu'on l'ait revérifié.
+
+---
+
+## `executor/watchdog.py`
+
+### ✅ Bon
+
+1. **`signal.alarm()` plutôt qu'un thread ou un décorateur** — les deux approches naïvement envisagées ne marchent pas en Python : un thread ne peut pas être tué de force depuis l'extérieur (pas de `thread.kill()`), et un décorateur qui ne mesure le temps qu'après coup ne peut pas interrompre une boucle infinie en cours. `signal.alarm()` fonctionne parce que Python vérifie les signaux en attente entre chaque instruction bytecode — une vraie boucle `while True: pass` est interrompue.
+2. **`ExecutionTimeout(TimeoutError)`** — hérite de `TimeoutError`, donc de `Exception`, pas de `BaseException`. Capturée automatiquement par le `except Exception` déjà présent dans `_handle_exec`, sans rien changer côté `runner.py` au-delà du branchement du context manager.
+3. **`signal.alarm(0)` + restauration du handler précédent dans un `finally`** — le minuteur est désarmé et le handler restauré même si `exec()` lève une autre exception que le timeout, pas seulement dans le cas nominal.
+4. **Testé en conditions réelles contre un vrai `while True: pass`** — coupé après le délai configuré (~3.4s pour une limite à 3s), pas juste testé en théorie contre du code qui se termine tout seul.
+5. **`pause()`/`resume()` autour d'un `tool_call`** — le sujet est explicite : le timeout du sandbox ne s'applique qu'au code exécuté localement, pas aux actions du serveur MCP. Bug réel trouvé par test (pas en le lisant) : sans ça, un aller-retour `tool_call` comptait contre le budget d'exécution local et déclenchait un faux timeout. Testé avec une limite de **1 seconde** : l'aller-retour (qui prend certainement plus d'1s en horloge murale) passe sans se faire couper, confirmant que la pause fonctionne réellement.
+
+### ❌ Mauvais
+
+1. **`MAX_EXECUTION_TIME_SECONDS` lu une seule fois au chargement du module `runner.py`**, pas par message — si `SandboxConfig` changeait en cours de session (cas non prévu aujourd'hui, une session = un conteneur = une config fixe), la nouvelle valeur ne serait jamais prise en compte. Cohérent avec l'architecture actuelle, mais implicite.
+2. **Pas de garde contre un appel imbriqué** — si `enforce()` était appelé une seconde fois avant que le premier `signal.alarm(0)` n'ait eu lieu (ne devrait pas arriver dans le flux actuel, mono-thread et séquentiel), le second appel écraserait le minuteur du premier sans avertissement.
+
+---
+
+## `mcp_bridge.py`
+
+### ✅ Bon
+
+1. **Facade synchrone sur `fastmcp.Client` (async)** — thread dédié + event loop persistante, `_run()` comme seul point de passage sync→async. Évite de réécrire tout le reste du sandbox (synchrone, sockets bloquants) en async pour brancher un seul client.
+2. **La connexion MCP reste ouverte pour toute la session**, pas rouverte à chaque appel — le sous-processus du serveur MCP (`stdio`) n'est lancé qu'une fois.
+3. **`call_tool()` testé en conditions réelles**, pas juste `list_tools()` — appel positionnel réel à `run_tests()` relayé jusqu'au vrai serveur MCP et retour, y compris le cas d'erreur légitime du serveur (tâche non chargée), correctement propagé plutôt que masqué. `is_connected()` utilisé pour distinguer cette erreur légitime d'une vraie déconnexion — testé les deux cas dans le même run pour confirmer qu'aucun n'est mal étiqueté.
+4. **`__enter__`/`__exit__` sans capture d'exception**, même pattern que `SandboxContainer` — cohérence de style, et garantit la fermeture même en cas d'exception pendant la session.
+5. **`shlex.split()` plutôt qu'un `.split()` naïf** pour découper `--mcp-stdio` — gère correctement une commande avec des arguments contenant des espaces entre guillemets.
+
+### ❌ Mauvais
+
+1. **Transport HTTP (`server_url`) jamais testé en conditions réelles** — seul `stdio` a été vérifié contre un vrai serveur. `fastmcp.Client` est censé inférer le transport depuis l'URL, mais ce chemin de code n'a jamais tourné.
+
+---
+
+## `sandbox/session.py`
+
+### ✅ Bon
+
+1. **Extrait pour éviter une duplication anticipée** — la séquence "découvrir les tools → construire le conteneur avec les bons noms" n'est pas spécifique au REPL ; `agent_core` devra faire exactement la même chose. Factoriser maintenant évite de la dupliquer plus tard.
+2. **Frontière nette avec `cli.py`** : `session.py` sait *comment* câbler correctement un conteneur à partir d'un bridge déjà connecté ; `cli.py` décide *quand* se connecter/déconnecter (spécifique à chaque appelant — REPL vs future boucle agent).
+3. **Extrait `inputSchema.properties`** (un dict, donc l'ordre des clés = ordre de déclaration) pour transmettre au conteneur non seulement les noms des tools mais aussi l'ordre de leurs paramètres — nécessaire pour que `runner.py` mappe correctement un appel positionnel (`run_tests("...")`) au bon nom de paramètre.
+4. **`mcp_bridge is None` géré explicitement** — `tools = {}` si aucun serveur n'est connecté, pas de branche spéciale nécessaire en aval dans `container.py`/`runner.py`.
+5. **Testé de bout en bout en conditions Docker réelles**, pas seulement à la lecture — le mapping nom→paramètres produit ici est exactement ce qui a permis à `run_tests("...")` de fonctionner en positionnel côté sandbox.
+
+### ❌ Mauvais
+
+1. **Suppose que tous les tools ont un `inputSchema` de type `object` avec `properties`** — un tool MCP avec un schéma différent (type non-objet, `$ref`, schéma composé) ferait échouer silencieusement l'extraction (`properties` vide), pas testé contre un tel cas puisque `mcp_tools_mbpp.py` n'expose qu'un tool simple.
 
 ---
 
@@ -106,13 +154,12 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 1. **Les deux conditions de sortie du sujet sont là** — `exit` et EOF (Ctrl+D), littéralement « It exits cleanly on the exit command or on EOF (Ctrl+D) ».
 2. **`EOFError` capturée plutôt que laissée remonter** — sans ce `try`, Ctrl+D produirait une traceback. C'est la différence entre « exits cleanly » et « crashe à la fermeture ».
 3. **`.strip()` sur le test de sortie** — `"exit "` avec un espace parasite fonctionne. Détail, mais c'est le genre de chose qu'un correcteur teste au clavier en 2 secondes.
-4. **`container` reçu en paramètre, pas construit ici** — le REPL ne possède pas le cycle de vie, donc il ne peut pas fuiter un conteneur ni empêcher `cli.py` de le nettoyer. Séparation correcte.
-5. **Ignore totalement Docker, les sockets et le format de trame** — ne connaît que `send`/`receive`. Si le mécanisme d'isolation change (process au lieu de conteneur), ce fichier ne bouge pas.
+4. **`container` et `mcp_bridge` reçus en paramètres, pas construits ici** — le REPL ne possède aucun cycle de vie, donc il ne peut fuiter ni l'un ni l'autre, et ne peut empêcher `cli.py` de les nettoyer. Séparation correcte, y compris pour la nouvelle boucle de relais.
+5. **`_relay_tool_calls` gère le cas `mcp_bridge is None`** (aucun serveur MCP connecté) sans planter — renvoie un `tool_result` d'erreur explicite au conteneur plutôt que de lever une exception côté host. Testé de bout en bout en conditions Docker réelles contre le vrai `mcp_tools_mbpp.py` : `run_tests()` appelé en positionnel depuis le code sandboxé, résultat relayé correctement jusqu'au bout.
 
 ### ❌ Mauvais
 
-1. **`print(response)` affiche le dict brut** — l'utilisateur verra `{'type': 'result', 'stdout': '4\n'}` au lieu de `4`. Le sujet demande « it prints the result or any raised error » : résultat et erreur doivent être **distingués** visuellement, ce que l'affichage d'un dict ne fait pas.
-2. **Le cas `final_answer` n'est pas traité.** Le sujet exige que le REPL ait « the connected MCP tool wrappers and final_answer available ». Si l'utilisateur tape `final_answer("x")`, le message de retour aura un type différent de `result` — et rien ici ne le reconnaît. L'implémentation est côté exécuteur, mais l'affichage est côté REPL.
+Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial » pour l'historique.
 
 ---
 
@@ -136,16 +183,16 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 | Exigence | État |
 |---|---|
 | CLI `uv run sandbox` (4 formes) | ✅ Les 4 formes fonctionnent, testé de bout en bout (`--mcp-stdio` contre le vrai `mcp_tools_mbpp.py`) |
-| REPL interactif | 🟡 Boucle, sorties, multi-ligne et Ctrl+C OK ; affichage brut, `final_answer` non traité |
-| `final_answer` injecté | ❌ Absent |
+| REPL interactif | ✅ Boucle, sorties, multi-ligne, Ctrl+C, relais `tool_call` et affichage distinct résultat/erreur/`final_answer` |
+| `final_answer` injecté | ✅ Testé imbriqué dans une fonction/boucle, propagation par exception vérifiée à plusieurs niveaux d'appel |
 | `KeyboardInterrupt`/`SystemExit` propagées | ✅ Structurellement garanti par `__exit__` |
 | Restriction imports | ✅ Branché et vérifié en conditions réelles (Docker) |
-| Restriction filesystem | 🟡 Racine en read-only + tmpfs (Docker) ; l'allowlist `allowed_directories` reste à appliquer dans `restrictions.py` |
+| Restriction filesystem | ✅ Docker (read-only + tmpfs) + `open` restreint par `allowed_directories` au niveau Python, testé contre `../` et collision de préfixe |
 | Pas de réseau | ✅ `network_mode="none"` |
-| Timeout d'exécution | ❌ Stub |
+| Timeout d'exécution | ✅ `signal.alarm()`, testé en conditions réelles contre une vraie boucle infinie |
 | Limite mémoire | ✅ `mem_limit` |
-| Builtins restreints | ❌ Stub |
-| Intégration MCP (stdio + HTTP) | 🟡 Connexion réelle + découverte des tools fonctionnelles (`MCPBridge`, testé contre `mcp_tools_mbpp.py`) ; `protocol.py` définit le message `tool_call` mais `runner.py` ne l'émet pas encore, transport HTTP non testé en réel |
+| Builtins restreints | ✅ Allowlist testée en conditions réelles ; limite connue documentée (introspection `__subclasses__`, non fermable en stdlib pur) |
+| Intégration MCP (stdio + HTTP) | 🟡 Relais `tool_call` complet et vérifié en conditions Docker réelles (stdio) ; transport HTTP jamais testé en réel |
 | Manuel dynamique | ❌ Stub |
 | Config Pydantic + JSON | ✅ Fait, défauts à réaligner |
 
@@ -155,9 +202,10 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 
 Par ordre d'impact sur la note :
 
-1. **Écrire `watchdog.py`** — timeout par exécution, dernière des 6 contraintes de sécurité pas encore couverte (`exam_sandbox.sh` exige **100 %**, §VI.2)
-2. **Restreindre les builtins** (`open`, `eval`, `exec`...) — deuxième volet de `restrictions.py`, pas encore fait
-3. **Relayer les `tool_call`** conteneur → `MCPBridge` et injecter `final_answer`/les stubs d'outils dans `NAMESPACE` — la connexion MCP fonctionne déjà côté host, mais `runner.py` ne sait pas encore émettre ce type de message ni attendre sa réponse
+Les 6 contraintes de sécurité §V.2.3 et le relais `tool_call`/`final_answer` sont maintenant couverts et vérifiés en conditions réelles Docker. Il reste, par ordre d'impact :
+
+1. **Tester le transport HTTP de `MCPBridge`** contre un vrai serveur MCP en HTTP streamable — seul `stdio` a été vérifié en conditions réelles jusqu'ici
+2. **Le manuel dynamique** (`agent_core/manual.py`, hors périmètre de cet audit) reste un stub — nécessaire pour documenter les tools au LLM (§V.2.6)
 
 ---
 
@@ -195,3 +243,11 @@ Par ordre d'impact sur la note :
 | `restrictions.install()` écrit mais jamais appelé — `runner.py` n'avait aucun moyen de recevoir `SandboxConfig` | `container.py`, `executor/runner.py` | Toute la `SandboxConfig` sérialisée en JSON dans la variable d'env `SANDBOX_CONFIG_JSON` posée à la création du conteneur (`model_dump_json()`), lue côté `runner.py` **avant** l'appel à `restrictions.install()` (le `import os` nécessaire pour lire `os.environ` a lieu avant la purge de `os`, même principe que le pré-import). Un seul passage réutilisable pour `watchdog.py` plus tard (même variable, autres champs). Vérifié en conditions réelles Docker | 2026-08-18 |
 | `compile(code, "<sandbox>", "single")` dans `runner.py` rejetait tout message de plus d'un statement (`SyntaxError: multiple statements found`) — aurait cassé tout code multi-lignes envoyé par la future boucle agent | `executor/runner.py` | Mode changé en `"exec"` (accepte plusieurs statements, perd l'auto-affichage REPL d'une expression isolée — acceptable, un LLM utilise `print()` explicitement). Trouvé et corrigé grâce au test Docker réel avec `import math\nprint(math.sqrt(16))`, pas en théorie | 2026-08-18 |
 | Message protocole malformé (JSON invalide, `"type"` absent) faisait planter tout `runner.py` — le `except Exception` référençait `message["type"]`, qui plantait à son tour si `message` n'existait pas encore | `executor/runner.py` | `try/except/else` : `json.JSONDecodeError` capturée spécifiquement (pas `Exception`), `message.get("type")` au lieu de `message["type"]` (plus de `KeyError` possible), messages d'erreur reflétant la vraie cause. Testé en conditions réelles Docker : JSON invalide, type inconnu, champ `type` absent — les trois renvoient une `ErrorMessage` claire et la session survit (un `exec` normal juste après fonctionne toujours) | 2026-08-18 |
+| Aucun timeout par exécution — un `exec` qui boucle à l'infini bloquait `runner.py` indéfiniment | `executor/watchdog.py` (nouveau) | `signal.alarm()` + handler `SIGALRM` levant `ExecutionTimeout(TimeoutError)`, capturée automatiquement par le `except Exception` déjà existant. Deux approches naïves écartées et expliquées (thread — impossible à tuer de force en Python ; décorateur post-hoc — ne peut pas interrompre une boucle en cours). Testé en conditions réelles contre un vrai `while True: pass` : coupé après le délai configuré, session vérifiée survivante ensuite | 2026-08-18 |
+| Aucune restriction des builtins — `open`/`eval`/`exec`/`input` accessibles tels quels dans le namespace d'exécution | `executor/restrictions.py` | `SAFE_BUILTINS` (allowlist) + `restricted_builtins()`, posé dans `NAMESPACE["__builtins__"]` avant la boucle. `__import__`/`__build_class__` gardés (nécessaires aux instructions `import`/`class`), `eval`/`exec`/`compile`/`input`/`breakpoint`/`help` exclus (`open` traité séparément, voir ligne suivante). Limite connue documentée dans le fichier plutôt que cachée : l'introspection objet (`__subclasses__`) contourne toujours l'allowlist, fermable seulement par une sandbox AST interdite par le sujet — Docker reste la vraie frontière. Testé en conditions réelles Docker : 4 builtins dangereux bloqués, classe+méthode/try-except/comprehension/import autorisé toujours fonctionnels | 2026-08-18 |
+| `allowed_directories` n'était appliqué nulle part côté Python — soit `open` totalement banni (rend le champ inutile), soit non restreint du tout | `executor/restrictions.py` | `open` **remplacé**, pas supprimé : `_make_restricted_open()` vérifie `os.path.realpath(file)` contre les racines autorisées (`target == root or target.startswith(root + os.sep)`, pour éviter qu'une collision de préfixe comme `/workspace-evil` passe). Bug réel trouvé par mypy avant même le test Docker : `os.path.realpath()` d'un chemin `bytes` retourne du `bytes`, comparé à tort à des racines `str` (`TypeError` à l'exécution) — corrigé avec `os.fsdecode()`. Testé en conditions réelles Docker : lecture/écriture OK dans `/workspace`, refusées hors de ce répertoire, y compris via `../` et le chemin en `bytes` (plus de crash) | 2026-08-18 |
+| `final_answer` absent — aucun moyen pour le code sandboxé de signaler la fin de tâche | `executor/runner.py` | `_FinalAnswerSignal(Exception)` levée par `final_answer(answer)`, capturée séparément de `except Exception` dans `_handle_exec` pour produire un `FinalAnswerMessage` plutôt qu'une erreur. Injecté comme global (pas un builtin — spécifique au sandbox, pas du Python standard). Testé en conditions réelles Docker, y compris **imbriqué dans une fonction appelée depuis une boucle** — confirme que l'exception remonte correctement à travers plusieurs niveaux d'appel | 2026-08-18 |
+| Aucun relais `tool_call` conteneur↔`MCPBridge` — les tools MCP découverts côté host n'étaient jamais utilisables depuis le code sandboxé | `sandbox/session.py` (nouveau), `container.py`, `executor/runner.py`, `executor/watchdog.py`, `repl.py`, `cli.py` | `session.build_container()` (nouveau, réutilisable par la future boucle agent) extrait `{nom: [params]}` de `inputSchema` et le transmet au conteneur via `MCP_TOOLS_JSON`. `runner.py` crée un stub par tool, qui écrit/lit directement sur stdout/stdin (pas via `main()`, déjà bloqué plus haut dans la pile). `repl.py` boucle sur `container.receive()` : relaie tout `tool_call` à `mcp_bridge.call_tool()`, renvoie le `tool_result`, jusqu'à obtenir la vraie réponse finale. **3 bugs réels trouvés uniquement par les tests Docker, pas en les relisant** : (1) le stub n'acceptait que `**kwargs` alors que `run_tests("...")` s'appelle en positionnel — corrigé en mappant les positions aux noms de paramètres via `inputSchema` ; (2) le timeout d'exécution local comptait à tort le temps d'attente du `tool_call` — corrigé avec `watchdog.pause()`/`resume()` (§V.2 : les actions du serveur MCP ne sont pas soumises au timeout du sandbox) ; (3) le plus sournois — `redirect_stdout(buffer)` (qui capture le `print()` de l'utilisateur) capturait aussi le message protocole du stub, provoquant un double blocage silencieux (host et conteneur attendant chacun une donnée qui n'arriverait jamais) — corrigé avec `REAL_STDOUT`, une référence capturée avant toute redirection. Testé de bout en bout avec une limite d'exécution de 1 seconde pour confirmer que la pause du watchdog fonctionne vraiment, pas juste "assez rapide pour ne pas se voir" | 2026-08-20 |
+| `print(response)` affichait le dict brut — pas de distinction visuelle résultat/erreur/`final_answer` | `repl.py` | `_format_response()` : `result` → juste le `stdout` capturé ; `error` → la traceback complète (répond littéralement au « it prints ... any raised error » du sujet) ; `final_answer` → préfixé explicitement ; fallback `repr()` pour un type inattendu (pas d'échec silencieux). `end=""` sur le `print()` pour ne pas doubler les retours à la ligne déjà présents dans `stdout`/`traceback`. Testé en conditions réelles Docker : sortie normale, statement silencieux, `ZeroDivisionError` avec traceback lisible, `final_answer` bien distingué | 2026-08-20 |
+| Docstring décrivait une capacité absente (« a single task run ») | `cli.py` | Corrigé pour décrire le comportement réel : toujours interactif, sans argument de tâche — la distinction avec les futurs agents (`agent_mbpp`/`agent_swebench`, non-interactifs) est explicitée | 2026-08-20 |
+| Aucune détection d'un serveur MCP mort en cours de session — `call_tool()` aurait levé une exception `fastmcp` brute | `mcp_bridge.py` | `is_connected()` (méthode synchrone de `fastmcp.Client`) vérifiée après une exception dans `call_tool()` : si déconnecté, relève un `ConnectionError` clair ; sinon, l'exception d'origine (ex: `ToolError` légitime) remonte inchangée. **Bug distinct trouvé en testant ce fix** : appeler `_run()` après `close()` bloquait indéfiniment (boucle asyncio arrêtée + thread joint, `run_coroutine_threadsafe` programme un callback qui ne s'exécute jamais) — corrigé par un check `self._loop.is_running()` avant soumission, échec immédiat avec un message clair. Testé en conditions réelles : erreur légitime préservée, déconnexion après `close()` détectée sans blocage | 2026-08-20 |

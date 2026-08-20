@@ -6,8 +6,10 @@ Usage:
   uv run sandbox --mcp-stdio "python mcp_tools_mbpp.py" sandbox_template.json
   uv run sandbox --mcp-server <URL>                          HTTP transport
 
-Wires together: config loading, container lifecycle, mcp_bridge, and either
-the REPL (no task) or a single task run.
+Wires together: config loading, container lifecycle, mcp_bridge (if a
+transport flag is given), and the interactive REPL. No task-file argument —
+this entry point is always interactive; a benchmark agent (agent_mbpp,
+agent_swebench) drives the sandbox non-interactively through its own CLI.
 """
 
 import argparse
@@ -19,9 +21,8 @@ from pathlib import Path
 import pydantic
 from docker.errors import DockerException
 
-from sandbox import repl
+from sandbox import repl, session
 from sandbox.config import SandboxConfig
-from sandbox.container import SandboxContainer
 from sandbox.mcp_bridge import MCPBridge
 
 PROG_NAME = "sandbox"
@@ -93,16 +94,17 @@ def main() -> None:
             stdio_command=args.mcp_stdio, server_url=args.mcp_server
         )
     try:
-        container = SandboxContainer(
-            config,
-            image=DEFAULT_SANDBOX_IMAGE,
-            build_context=SANDBOX_BUILD_CONTEXT,
-        )
         with contextlib.ExitStack() as stack:
             if mcp_bridge is not None:
                 stack.enter_context(mcp_bridge)
+            container = session.build_container(
+                config,
+                DEFAULT_SANDBOX_IMAGE,
+                SANDBOX_BUILD_CONTEXT,
+                mcp_bridge,
+            )
             c = stack.enter_context(container)
-            repl.run(c)
+            repl.run(c, mcp_bridge)
     except DockerException as e:
         print(f"error: could not reach Docker: {e}", file=sys.stderr)
         sys.exit(1)
