@@ -9,9 +9,9 @@
 
 ---
 
-## ⚠️ État général : un seul module a du contenu réel
+## ⚠️ État général : 4 modules sur 5 ont du contenu réel
 
-Sur les 5 fichiers d'`agent_core/`, seul `provider/` (LLM) a été implémenté. `loop.py`, `manual.py`, `parsing.py`, `sandbox_client.py` sont encore des stubs (docstring uniquement, aucune ligne de code) — c'est-à-dire que **la boucle agent elle-même n'existe pas encore**. Rien de ce qui suit n'a donc pu être testé de bout en bout (aucun appel LLM réel n'a été exécuté dans le cadre de cet audit — l'analyse s'appuie sur mypy, flake8, et la lecture du code).
+`provider/` (LLM), `loop.py` (squelette minimal), `sandbox_client.py` et `parsing.py` (format primaire seulement) sont maintenant implémentés. Seul `manual.py` reste un stub (docstring uniquement) — mais surtout, **aucun des trois n'est encore branché ensemble** : `loop.py` n'appelle ni `parsing.extract_code()` ni `sandbox_client.run_code()`, donc **rien de ce qui suit n'a été testé de bout en bout avec un vrai appel LLM** (l'analyse s'appuie sur mypy, flake8, la lecture du code, et pour `parsing.py` des tests réels contre des exemples de sortie LLM réalistes). Le sandbox lui-même (`sandbox_client.py` mis à part) est testé en conditions Docker réelles — voir `AUDIT_SANDBOX.md`.
 
 ---
 
@@ -27,40 +27,65 @@ Sur les 5 fichiers d'`agent_core/`, seul `provider/` (LLM) a été implémenté.
 
 ### ❌ Mauvais
 
-1. **Signature incompatible avec l'interface abstraite — confirmé par mypy, pas une supposition.**
-   ```
-   agent_core/provider/base.py:103: error: Signature of "get_response" incompatible with supertype "AbstractLLM"
-   Superclass:  def get_response(self, step: int) -> StepMetrics
-   Subclass:    def get_response(self, step: int, prompt: str) -> StepMetrics
-   ```
-   `prompt` est requis dans l'implémentation mais absent du contrat abstrait — un second provider qui respecterait scrupuleusement `AbstractLLM` telle quelle ne pourrait pas passer de prompt du tout.
-2. **Aucun `try/except` autour de `self.__router.completion(...)`** — alors que `LLMError` existe déjà dans le fichier, rien ne l'utilise à cet endroit. Si tous les fallbacks du router s'épuisent, l'exception LiteLLM brute remonte telle quelle, contrairement à §IV.1 (*"All errors must be handled gracefully"*).
-3. **Accès non protégé à des champs qui peuvent ne pas exister — 6 erreurs mypy distinctes**, pas juste une supposition théorique :
-   ```
-   error: Item "CustomStreamWrapper" of "ModelResponse | CustomStreamWrapper" has no attribute "usage"
-   error: Item "CustomStreamWrapper" of "ModelResponse | CustomStreamWrapper" has no attribute "choices"
-   error: Argument "api_url" to "StepMetrics" has incompatible type "Any | str | None"; expected "str"
-   ```
-   `stream=False` est passé explicitement, donc en pratique `llm_gen` est toujours un `ModelResponse` — mais rien dans le code ne l'affirme (pas d'assertion, pas de narrowing), donc si un jour le streaming est activé sans revoir ce code, ça plantera silencieusement en prod. `llm_gen._hidden_params["api_base"]` accède en plus à un attribut privé (préfixe `_`) dont la présence n'est pas garantie — s'il est absent, `None` est passé à un champ `StepMetrics.api_url` typé `str` (pas `str | None`), ce qui lèvera une `ValidationError` Pydantic à l'exécution.
-4. **`self.__model_name.split('/')[1]` sans validation.** Si `model_name` ne contient pas de `/` (erreur de saisie, ex: `"gpt-4"` sans préfixe provider), `IndexError` non capturé — crash brut plutôt qu'un message clair, alors que le fichier vérifie déjà l'absence de clés API avec un message propre juste avant.
-5. **Placeholders explicites, à corriger avant toute soumission réelle** : `sandbox_input`/`sandbox_output = "NOT IMPLEMENTED"`, et surtout `retries=9999999999` — cette valeur remonte telle quelle jusqu'à `SolutionOutput.steps` puis `solution.json` si rien ne change, et le sujet vérifie explicitement l'absence de valeurs fabriquées en soutenance (§VI.4).
+Aucun point ouvert — les 3 points identifiés initialement (absence de `try/except` autour de `self.__router.completion(...)`, `split('/')[1]` non validé, placeholders `NOT IMPLEMENTED`/`retries=9999999999`) ont été corrigés le 2026-08-20, voir « Corrigés ».
 
 **Non bloquant mais à noter** : pas de gestion des `stop_sequences` (mentionnée dans le découpage initial du projet pour ce fichier, absente ici) ; attributs en double underscore (`self.__model_name`) — déclenche le name mangling Python, plus défensif que nécessaire pour une simple convention "privé" (un seul underscore suffirait, style non-bloquant).
 
 ---
 
-## `loop.py`, `manual.py`, `parsing.py`, `sandbox_client.py`
+## `loop.py`
 
-Tous les quatre sont encore des stubs — uniquement le docstring d'intention posé au tout début du projet, aucune implémentation.
+### ✅ Bon
+
+1. **Accumulation d'historique de conversation au format OpenAI** (`messages: list[dict]`, `role`/`content`) plutôt qu'une string aplatie — le modèle garde le contexte complet des itérations précédentes, cohérent avec la signature `get_response(step, messages)` de `provider/base.py` (choix déjà validé — « option A »).
+2. **Setup unique en dehors de la boucle** — l'instance `LLM(model_name)` (donc le `Router` et ses clés) n'est construite qu'une fois, pas reconstruite à chaque itération.
+3. **Aucune valeur fabriquée** : le squelette retourne `list[StepMetrics]` brut plutôt que d'assembler un `SolutionOutput` avec des champs `success`/`solution` inventés — ces champs ne sont honnêtement calculables qu'après extraction de code (`parsing.py`) et exécution sandbox (`sandbox_client.py`), tous deux absents pour l'un ou déjà présents mais non branchés pour l'autre.
+4. **Une seule condition d'arrêt, mais explicite et documentée** : `max_iterations` — le docstring précise noir sur blanc que `final_answer`/limites cumulées ne sont pas encore gérées, plutôt que de laisser croire à une boucle complète.
+
+### ❌ Mauvais
+
+1. **Pas de détection de `final_answer`** — la boucle tourne toujours exactement `max_iterations` fois même si le LLM a déjà résolu la tâche, contraire à « Iterate until the task is solved » (§III.1). Dépend de `parsing.py` (stub) pour savoir quand s'arrêter — noté comme point ouvert plutôt que bug, cohérent avec la consigne de ne pas anticiper une pièce absente.
+2. **`llm.get_response()` appelé sans `try/except`** — si un `LLMError` est levé à l'itération *n*, tout `run()` plante et les `StepMetrics` des itérations 1 à *n-1* sont perdus (jamais retournés), alors que le sujet veut un `SolutionOutput.error` renseigné plutôt qu'un crash brut, avec l'historique partiel des `steps` déjà produits.
+3. **Aucune boucle Thought→Code→Observation réelle pour l'instant** — seuls des messages `role: "assistant"` sont ajoutés ; jamais de `role: "user"` en retour (le résultat sandbox), donc le LLM ne reçoit aucune Observation à ce stade. Attendu tant que `sandbox_client.py` n'est pas branché ici, mais à corriger dès que ce sera fait.
+4. **Pas de limites cumulées** (tokens totaux, temps total) — seul `max_iterations` est un paramètre ; rien n'empêche une boucle de consommer un budget de tokens disproportionné avant d'atteindre `max_iterations`.
+
+---
+
+## `sandbox_client.py`
+
+### ✅ Bon
+
+1. **Retourne le dict brut** (`result`/`error`/`final_answer`) plutôt qu'une string déjà formatée — laisse le choix du format à `loop.py`, qui a le contexte du `step` courant ; évite de dupliquer la logique d'affichage déjà écrite pour un besoin différent dans `repl._format_response`.
+2. **Réutilise `session.relay_tool_calls`** au lieu d'en écrire une copie — élimine la duplication qui serait sinon apparue entre ce fichier et `repl.py` (même motivation que `session.build_container`, voir `AUDIT_SANDBOX.md`).
+3. **Respecte la séparation générique/spécifique** : `loop.py` n'a pas besoin d'importer `sandbox.container`/`sandbox.mcp_bridge` directement, seulement `sandbox_client.run_code`.
+
+### ❌ Mauvais
+
+1. **Jamais testé en conditions Docker réelles** — contrairement à `container.py`/`session.py` (testés de bout en bout, voir `AUDIT_SANDBOX.md`), ce fichier n'a été vérifié qu'avec mypy/flake8, pas avec un vrai `run_code()` contre un conteneur démarré.
+
+---
+
+## `parsing.py`
+
+### ✅ Bon
+
+1. **`None` explicite pour "aucun bloc trouvé"**, pas d'exception ni de chaîne vide — signal propre que `loop.py` pourra transformer en feedback pour le LLM (§V.1 : *"No valid code block was found in the model's response"*), sans deviner ni fabriquer un code vide qui planterait bêtement dans le sandbox.
+2. **Testé contre des exemples réels, pas juste supposé correct** : l'exemple exact du sujet (ligne 619, prose + bloc de code), l'absence de bloc, la présence du marqueur `<end_code>` après le fence, et un bloc multi-lignes — les 4 cas extraient exactement ce qui est attendu.
+3. **Robuste au marqueur `<end_code>`** sans le traiter spécifiquement — la regex s'arrête au premier ``` ``` ``` fermant, qu'`<end_code>` suive ou non ; cohérent avec le fait que c'est un `stop_sequence` API (§V.6, ligne 693-699), pas un token garanti présent dans le texte reçu.
+
+### ❌ Mauvais
+
+1. **Seul le format (a) du sujet est géré** — XML tool calls (b), JSON/Hermes tool calls (c), ReAct (d) sont listés dans le sujet mais absents ici. Déféré volontairement (premier passage bout en bout avec le format primaire avant d'ajouter les 3 autres), mais reste un vrai manque pour le multi-provider (§V.1 : *"handle different output formats ... to fit what the LLMs you use were trained on"*).
+2. **Pas de distinction "bloc malformé mais interprété quand même"** — le sujet demande explicitement ce cas de feedback (§V.1) ; la regex actuelle ne détecte que présent/absent, pas "presque valide" (ex: fence non fermé, indentation cassée).
+3. **`re.search` ne prend que le premier bloc** — si le LLM génère plusieurs blocs de code dans une même réponse, les suivants sont silencieusement ignorés, sans feedback à ce sujet.
+
+---
+
+## `manual.py`
 
 | Fichier | Rôle prévu | État |
 |---|---|---|
-| `loop.py` | Boucle Thought→Code→Observation (§V.1) | ❌ Stub |
-| `parsing.py` | Extraction du code depuis la sortie LLM, 4 formats (§V.1.2) | ❌ Stub |
-| `sandbox_client.py` | Client générique vers le process `sandbox` (§V.1.3) | ❌ Stub |
 | `manual.py` | Génération dynamique du manuel depuis les schémas MCP (§V.2.6) | ❌ Stub |
-
-Point notable : **le sandbox lui-même (côté `student/sandbox/`) est fonctionnel et testé de bout en bout** (voir `AUDIT_SANDBOX.md`) — connexion MCP, restrictions, watchdog, relais `tool_call`, tout marche en conditions Docker réelles. Rien de tout ça n'est encore branché à un appel LLM réel : la pièce manquante est exactement cette boucle.
 
 Depuis le 2026-08-20, `agent_mbpp/` et `agent_swebench/` ne sont plus des répertoires complètement vides — chacun contient un `task.py` (le modèle de tâche spécifique, déplacé depuis `data_models/`, voir plus bas) — mais toujours aucun CLI/`__main__.py`, donc les 3 commandes du §V.3.1/§V.4.1 restent inexistantes.
 
@@ -95,6 +120,14 @@ Aucun point ouvert.
 | `data_models/__init__.py` important via `from student.data_models.X import Y` — `student` n'est pas un package top-level une fois `student` installé comme paquet (seuls `sandbox`, `agent_core`, `data_models` le sont individuellement). Bloquait **tout** import de `data_models`, donc `agent_core.provider` aussi, dès qu'invoqué autrement qu'en script depuis la racine du dépôt. | `data_models/__init__.py` | Imports internes changés en `from data_models.X import Y`, cohérent avec la convention déjà utilisée dans `sandbox/`. Vérifié dans les deux contextes : `import data_models` (depuis `student/`) et `from student.data_models import X` (depuis la racine, utilisé par `mcp_tools_*.py`) fonctionnent tous les deux. |
 | `agent_core/llm.py` — hors de la structure `provider(s)/` prévue dès le début du projet, faisait doublon avec un dossier `provider/` vide déjà présent (non suivi par git) | `agent_core/provider/base.py` (déplacé), `agent_core/provider/__init__.py` (rempli) | Contenu déplacé tel quel (aucune logique modifiée), `__init__.py` exporte `AbstractLLM`, `LLM`, `LLMError` |
 | `data_models/` centralisait les 4 modèles du contrat, en contradiction avec le découpage générique/spécifique posé au début du projet (`agent_core/schemas.py` prévoyait `StepMetrics`/`SolutionOutput` partagés, `MBPPTaskInput`/`SWEBenchTaskInput` spécifiques) — contradiction déjà signalée dans `AUDIT_MBPP.md` | `agent_core/schemas.py` (recréé : `TaskInput`, `StepMetrics`, `SolutionOutput`), `agent_mbpp/task.py` (nouveau : `MBPPTaskInput`), `agent_swebench/task.py` (nouveau : `SWEBenchTaskInput`), `data_models/` supprimé | 3 imports mis à jour (`mcp_tools_mbpp.py`, `mcp_tools_swebench.py`, `provider/base.py`), `pyproject.toml` nettoyé. Vérifié dans les deux sens : import en paquet installé (`agent_mbpp.task`) et depuis la racine (`student.agent_mbpp.task`, utilisé par `mcp_tools_mbpp.py`) ; `mypy`/`flake8` sans nouvelle erreur ; `mcp_tools_mbpp.py` démarre sans `ModuleNotFoundError` |
+| Signature de `get_response` incompatible avec `AbstractLLM` (`step` seul dans l'interface, `step, prompt` dans l'implémentation) | `agent_core/provider/base.py` | Les deux signatures alignées sur `get_response(step, messages: list[dict])` — `prompt: str` remplacé par une vraie liste de messages OpenAI-style, nécessaire de toute façon pour que `loop.py` puisse faire suivre l'historique de conversation qui s'accumule au fil des itérations. Vérifié : l'erreur mypy `Signature ... incompatible with supertype` a disparu. |
+| 6 erreurs mypy sur des accès non protégés (`llm_gen.usage`, `.choices`, `._hidden_params["api_base"]`) — `llm_gen` peut être un `CustomStreamWrapper` sans ces attributs, et `api_url`/`llm_output` pouvaient recevoir `None` sur un champ `str` | `agent_core/provider/base.py` | `isinstance(llm_gen, ModelResponse)` explicite (lève `LLMError` sinon) plutôt qu'une hypothèse silencieuse liée à `stream=False`. Découverte en creusant : `usage` peut être **réellement** `None` à l'exécution même avec `stream=False` (confirmé en lisant le source LiteLLM, pas une simple lacune de stub) — `getattr(llm_gen, "usage", None)` avec fallback à `0` gère ce cas réel, pas juste l'erreur de type. `_hidden_params.get(...) or ""` et `.content or ""` couvrent les deux derniers champs. Vérifié : `mypy agent_core` passe à 0 erreur (8 fichiers). |
+| Aucun `try/except` autour de `self.__router.completion(...)` — l'exception LiteLLM brute remontait telle quelle si tous les fallbacks du router s'épuisaient | `agent_core/provider/base.py` | `try/except Exception as e: raise LLMError(...) from e` autour de l'appel, cohérent avec §IV.1 et avec le pattern déjà utilisé pour l'absence de clés API. Vérifié : `mypy agent_core` → 0 erreur, `flake8 agent_core/provider/base.py` → 0 warning. |
+| `self.__model_name.split('/')[1]` sans validation — `IndexError` brut si `model_name` ne contient pas de `/` | `agent_core/provider/base.py` | Garde ajoutée dans `__init__`, avant toute utilisation de `split`/`[0]`/`[1]` : `if "/" not in model_name: raise LLMError(...)`. Message explicite avec le format attendu (`"provider/model"`). |
+| Placeholders `sandbox_input`/`sandbox_output = "NOT IMPLEMENTED"`, `retries=9999999999` dans `StepMetrics(...)` — valeurs fabriquées, interdites en soutenance (§VI.4) | `agent_core/provider/base.py` | Les 3 champs retirés de l'appel explicite à `StepMetrics(...)` : `get_response()` n'a de toute façon aucune visibilité sur l'exécution sandbox à ce stade (elle n'a pas encore eu lieu). Ils retombent sur leurs vrais défauts Pydantic (`""`, `""`, `0`) ; `loop.py` les renseignera après coup, une fois le code exécuté dans le sandbox (`StepMetrics` est un `BaseModel` mutable). |
+| `loop.py`/`sandbox_client.py` étaient des stubs vides — rien ne reliait `provider/` au sandbox | `agent_core/loop.py` (nouveau : `run(model_name, system_prompt, max_iterations) -> list[StepMetrics]`), `agent_core/sandbox_client.py` (nouveau : `run_code(container, mcp_bridge, code) -> dict`) | Squelettes volontairement minimaux — seules les pièces déjà écrites (`provider/`, `sandbox.container`/`session`/`mcp_bridge`) sont utilisées ; pas de détection `final_answer`, pas d'assemblage `SolutionOutput`, tant que `parsing.py` n'existe pas (aurait forcé des valeurs `success`/`solution` fabriquées). Vérifié : `mypy sandbox agent_core` (0 erreur, `executor/` vérifié séparément par convention) et `flake8` (0 warning) sur les fichiers touchés. |
+| `_relay_tool_calls` aurait été dupliquée entre `repl.py` et le nouveau `sandbox_client.py` | `sandbox/session.py` (fonction déplacée depuis `repl.py`, rendue publique : `relay_tool_calls`), `repl.py` (import mis à jour) | Extraite avant duplication plutôt qu'après — voir aussi `AUDIT_SANDBOX.md`, section `session.py`, pour le détail (comportement inchangé). |
+| `sandbox_client.run_code()` sans `try/except` autour de `container.send()`/`relay_tool_calls()` — une perte de connexion au conteneur remontait brute jusqu'à `loop.py` | `agent_core/sandbox_client.py` | `try/except (ConnectionError, TimeoutError)` autour de l'appel, remballé dans le même format que `protocol.ErrorMessage` (`type, error_type, message, traceback`) plutôt qu'un type de retour différent — `loop.py` n'aura jamais à distinguer "erreur du code exécuté" de "connexion perdue", les deux sont des `dict` de type `error`. Vérifié : `mypy sandbox agent_core` (0 erreur) et `flake8 agent_core/sandbox_client.py` (0 warning). |
 
 ---
 
@@ -102,8 +135,9 @@ Aucun point ouvert.
 
 Par ordre d'impact :
 
-1. **Écrire `loop.py`** — rien ne peut tourner de bout en bout sans lui ; c'est la pièce qui relie `provider/` (fait) et `sandbox` (fait et testé)
-2. **Corriger les 3 points mypy de `provider/base.py`** (signature, accès non protégés, `try/except` manquant) — vite fait vu que le sandbox a déjà établi le pattern (`except Exception` ciblé, pas de crash brut)
-3. **Remplacer les placeholders `NOT IMPLEMENTED`/`retries=9999999999`** avant toute tâche réelle soumise à la moulinette
-4. **`parsing.py`** ensuite — nécessaire dès que `loop.py` doit extraire du code d'une vraie réponse LLM
-5. **`sandbox_client.py`** et **`manual.py`** — le sandbox expose déjà tout ce dont ils ont besoin (`container.py`/`session.py`/`mcp_bridge.py`), donc plutôt du branchage que de la conception nouvelle
+1. **Brancher `parsing.extract_code()` et `sandbox_client.run_code()` dans `loop.py`** — fermer la boucle Thought→Code→Observation : extraire le code de `metrics.llm_output`, l'exécuter, ajouter un message `role: "user"` avec le résultat sandbox après chaque itération
+2. **Détecter `final_answer` dans `loop.py`** pour arrêter la boucle avant `max_iterations` — dépend du branchage ci-dessus (le type `final_answer` remonte via `sandbox_client.run_code()`)
+3. **Ajouter le `try/except` autour de `llm.get_response()` dans `loop.py`** — pour que les `steps` déjà produits ne soient pas perdus si une itération échoue
+4. **`manual.py`** ensuite — génération du system prompt depuis les schémas MCP ; garder en tête le risque de double `list_tools()` avec `session.build_container()` (voir échange précédent)
+5. **Assembler `SolutionOutput`** — possible une fois le branchage fait
+6. **Formats (b)/(c)/(d) de `parsing.py`** (XML, JSON/Hermes, ReAct) — une fois le format primaire prouvé bout en bout avec un vrai LLM

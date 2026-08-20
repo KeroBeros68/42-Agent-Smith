@@ -9,6 +9,7 @@ import time
 
 from agent_core.schemas import StepMetrics
 from litellm.router import Router
+from litellm.types.utils import ModelResponse
 
 
 class LLMError(Exception):
@@ -21,7 +22,7 @@ class AbstractLLM(ABC):
     """
 
     @abstractmethod
-    def get_response(self, step: int) -> StepMetrics:
+    def get_response(self, step: int, messages: list[dict]) -> StepMetrics:
         """
         This function returns the response from the LLM as a StepMetrics
         object. All LLM needs this function.
@@ -39,6 +40,11 @@ class LLM(AbstractLLM):
         Initializes the LLM.
         """
         # Initialize basic informations
+        if "/" not in model_name:
+            raise LLMError(
+                f"Invalid model name {model_name!r}: expected "
+                f"'provider/model' format (e.g. 'openai/gpt-4')."
+            )
         self.__model_name = model_name
         self.__provider = model_name.split("/")[0]
         self.__api_keys = self._get_keys_for_provider(self.__provider)
@@ -100,34 +106,59 @@ class LLM(AbstractLLM):
 
         return list(set(found_keys))
 
-    def get_response(self, step: int, prompt: str) -> StepMetrics:
+    def get_response(self, step: int, messages: list[dict]) -> StepMetrics:
         """Return the response from the LLM as a StepMetrics object.
 
         Args:
             step (int): Current step
+            messages (list[dict]): Full conversation so far, OpenAI-style
+                (e.g. [{"role": "system", "content": ...}, ...])
         """
         # Query to the LLM to answer the prompt
         start_time = time.time_ns()
-        llm_gen = self.__router.completion(
-            model=self.__model_name,
-            messages=[{"role": "system", "content": prompt}],
-            stream=False,
-        )
+        try:
+            llm_gen = self.__router.completion(
+                model=self.__model_name,
+                messages=messages,
+                stream=False,
+            )
+        except Exception as e:
+            raise LLMError(
+                f"LLM call failed for model {self.__model_name!r}: {e}"
+            ) from e
         end_time = time.time_ns()
+
+        # stream=False guarantees a ModelResponse at runtime, but the
+        # return type is still `ModelResponse | CustomStreamWrapper` —
+        # make that explicit instead of assuming it silently.
+        if not isinstance(llm_gen, ModelResponse):
+            raise LLMError(
+                f"Expected a ModelResponse (stream=False), got "
+                f"{type(llm_gen).__name__}"
+            )
+
+        # litellm's own source shows `usage` can be None even when
+        # stream=False (not just a stub gap — a real runtime case), and
+        # not every free-tier provider reports it. getattr() also sidesteps
+        # a stub gap where ModelResponse doesn't statically declare
+        # `.usage` even though it's set dynamically at construction.
+        usage = getattr(llm_gen, "usage", None)
+        input_tokens = usage.prompt_tokens if usage is not None else 0
+        output_tokens = usage.completion_tokens if usage is not None else 0
 
         # Build StepMetrics output from the LLM's result
         llm_metrics = StepMetrics(
             step=step,
-            input_tokens=llm_gen.usage.prompt_tokens,
-            output_tokens=llm_gen.usage.completion_tokens,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             request_time_ms=(end_time - start_time) / 1000,
-            api_url=llm_gen._hidden_params["api_base"],
+            api_url=llm_gen._hidden_params.get("api_base") or "",
             model_name=self.__model_name,
-            llm_output=llm_gen.choices[0].message.content,
-            # Implementation needed here !
-            sandbox_input="NOT IMPLEMENTED",
-            sandbox_output="NOT IMPLEMENTED",
-            retries=9999999999,
+            llm_output=llm_gen.choices[0].message.content or "",
+            # sandbox_input/sandbox_output/retries are unknown at this
+            # point (no code has been executed yet) and are left to their
+            # StepMetrics defaults; the caller (agent_core.loop) fills
+            # them in once the sandbox has actually run.
         )
 
         return llm_metrics
@@ -135,4 +166,14 @@ class LLM(AbstractLLM):
 
 if __name__ == "__main__":
     llm = LLM("deepseek/deepseek-v4-flash")
-    print(llm.get_response(1, "Write a short poem about keroberos68"))
+    print(
+        llm.get_response(
+            1,
+            [
+                {
+                    "role": "system",
+                    "content": "Write a short poem about keroberos68",
+                }
+            ],
+        )
+    )
