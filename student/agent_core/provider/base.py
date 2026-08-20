@@ -21,7 +21,7 @@ class AbstractLLM(ABC):
     """
 
     @abstractmethod
-    def get_response(self, step: int) -> StepMetrics:
+    def get_response(self, step: int, prompt: str) -> StepMetrics:
         """
         This function returns the response from the LLM as a StepMetrics
         object. All LLM needs this function.

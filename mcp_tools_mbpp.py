@@ -33,23 +33,6 @@ try:
         json.loads(os.environ.get("MBPP_TASK_JSON", "null")) or {}
     )
 
-    # DEBUG TASK
-    # TASK = MBPPTaskInput.model_validate(
-    #     json.loads(
-    #         """
-    #             {
-    #             "task_id": 282,
-    #             "task_definition": "Write a function to substaract two lists using map and lambda function.",
-    #             "function_definition": "def sub_list(nums1,nums2):",
-    #             "test_imports": [],
-    #             "test_list": [
-    #                 "assert sub_list([1,2],[3,4])==[-2,-2]",
-    #                 "assert sub_list([90,120],[50,70])==[40,50]"
-    #             ]
-    #             }
-    #         """
-    #     ) or {}
-    # )
 except (ValidationError, json.JSONDecodeError):
     TASK = None
 
@@ -93,7 +76,16 @@ def run_tests(code: str) -> str:
     for test in TASK.test_list:
         try:
             proc = subprocess.run(
-                [sys.executable, "-c", f"{imports}\n\n{code}\n\n{test}"],
+                [
+                    sys.executable,
+                    "-c",
+                    # Convert any SystemExit (sys.exit/exit/quit) in the
+                    # submitted code into a nonzero exit so it can't fake a
+                    # pass (a bare sys.exit(0) would otherwise exit 0 before
+                    # the assertion ever runs).
+                    f"import sys\n{imports}\n\n{code}\n\n"
+                    f"try:\n    {test}\nexcept SystemExit:\n    sys.exit(1)\n",
+                ],
                 timeout=TIMEOUT_DELAY_SEC * len(TASK.test_list),
                 input="",
                 capture_output=True,
