@@ -6,6 +6,8 @@
 > **Périmètre** : `mcp_tools_mbpp.py` (§V.3.2), les modèles du contrat d'évaluation — `student/agent_core/schemas.py`, `student/agent_mbpp/task.py`, `student/agent_swebench/task.py` (§V.3.3) —, `student/agent_core/` (§IV, §V.1, §V.3.1).
 >
 > **Méthode** : 5 points positifs max et 5 points négatifs max par fichier, justifiés par référence au sujet ou par un comportement observé. Les affirmations marquées « vérifié » ont été reproduites en lançant réellement le serveur MCP en stdio et en lui envoyant du JSON-RPC. Le sandbox (`student/sandbox/`) et les providers (`student/agent_core/provider/`) ne sont pas audités ici — voir `AUDIT_SANDBOX.md` et `AUDIT_AGENT_CORE.md`.
+>
+> **Corrections du 2026-08-20** : le commit `f411bfa` a enveloppé le test dans `try: {test} except SystemExit: sys.exit(1)` pour réduire le faux positif `sys.exit(0)` (❌1 du serveur MCP). Vérification refaite ici : le correctif couvre le `sys.exit` levé **pendant l'évaluation de l'assertion**, mais **ne ferme pas** le cas `os._exit(0)` ni le `sys.exit(0)` en tête de module — le point ❌1 reste donc valide, réduit mais non clos. Le même commit a retiré le bloc DEBUG commenté (un `MBPPTaskInput` en dur) qui encombrait le chargement. Le reste du document reflète l'état du dépôt à cette date.
 
 ---
 
@@ -31,7 +33,7 @@ Le contrat d'évaluation est en place : les trois modèles (`MBPPTaskInput`, `St
 
 ### ❌ Risques / problèmes
 
-1. **Le verdict repose sur le code de retour du processus : `sys.exit(0)` fait passer tous les tests.** Le code ne vérifie que `proc.returncode != 0` (l. 102). Vérifié : `import sys; sys.exit(0)` suivi d'une fonction renvoyant `None` reçoit « All test passed successfully ! », idem avec `os._exit(0)`. Ce n'est pas une triche théorique : un modèle qui écrit un `sys.exit()` défensif ou un `try/except: pass` autour de la logique obtient un faux positif, appelle `final_answer` avec un code faux, et la tâche est perdue à la validation. Il faut une **preuve que l'assertion a été évaluée** — par exemple un marqueur écrit par le processus enfant après l'assertion, seul accepté comme preuve de succès.
+1. **Le faux positif `sys.exit(0)` est réduit par le correctif du 20/08, mais pas fermé.** Le code ne vérifie toujours que `proc.returncode != 0` (l. 94), et le correctif enveloppe le test dans `try:\n    {test}\nexcept SystemExit:\n    sys.exit(1)` (l. 82-87). Résultat vérifié : un `sys.exit` levé **pendant l'évaluation de l'assertion** (ex. `def sub_list(a,b): import sys; sys.exit(0)`) fait maintenant sortir en code 1 → échec correct. Mais deux variantes passent toujours : `sys.exit(0)` **en tête de module** (exécuté avant d'atteindre le `try`, code 0 → succès) et surtout `os._exit(0)`, qui n'est **pas** un `SystemExit` et contourne `except` par construction — vérifié : `import sys; sys.exit(0)\ndef sub_list(a,b): return []` et `import os; os._exit(0)` reçoivent tous deux « All test passed successfully ! ». Ce n'est pas une triche théorique : un modèle qui écrit un `sys.exit()` défensif en tête de code, ou un `os._exit` quelconque, obtient un faux positif, appelle `final_answer` avec un code faux, et la tâche est perdue à la validation. Il faut une **preuve que l'assertion a été évaluée** — par exemple un marqueur écrit par le processus enfant après l'assertion, seul accepté comme preuve de succès.
 
 2. **Le timeout par test est quadratique : `10 × len(test_list)` *par processus*** (l. 97). Chaque test reçoit un budget de 10N s, donc un pire-cas total de **10N² s** — pour 5 tests, jusqu'à 250 s pour un seul appel d'outil, sur un budget global de 120 s (§VI.1.1). Le borne devrait s'appliquer au *total* cumulé, pas à chaque sous-processus. Il faut soit un budget global partagé (arrêt dès que le cumul dépasse un plafond), soit un timeout constant par test **et** un plafond global — la constante devrait venir de la configuration.
 
@@ -159,7 +161,7 @@ Hors périmètre strict de la partie MBPP, mais partage le même socle : hérite
 |---|---|---|
 | CLI `python -m agent_mbpp` (`--task-file`, `--output`, `--model-name`, `--provider-url`) | §V.3.1 | ❌ Absente — pas de `__main__.py`, `loop.py` est un docstring |
 | Chargement de tâche + exécution agent | §V.3.1 | ❌ Absent |
-| Outil MCP `run_tests` | §V.3.2 | 🟡 Fonctionne ; `test_list` vide corrigé ; mais faux positif `sys.exit(0)` et feedback pauvre |
+| Outil MCP `run_tests` | §V.3.2 | 🟡 Fonctionne ; `test_list` vide corrigé ; faux positif `sys.exit(0)` partiellement réduit (`except SystemExit` couvre le `sys.exit` levé pendant l'assertion), non fermé (`os._exit(0)` et `sys.exit(0)` en tête de module passent encore, vérifié) ; feedback pauvre |
 | Ressources et prompts MCP exposés | §V.2.5 | ❌ `resources/list` et `prompts/list` vides (vérifié) |
 | Transports stdio **et** HTTP | §V.2.5 | ✅ `MCP_TRANSPORT` env var |
 | `mcp_tools_mbpp.py` à la racine | §V.2.5 | ✅ |
@@ -180,7 +182,7 @@ Par ordre d'impact sur la note :
 1. **Écrire la boucle agent et ses points d'entrée** (`loop.py` + `__main__.py` pour `agent_mbpp`) : aucune des trois commandes du §V.3.1 n'existe, et sans elle le reste du contrat est inutilisable. C'est la condition de recevabilité du §V.3.
 2. **Faire passer l'exécution des tests par le sandbox existant** — réutiliser `SandboxContainer` (`network:none`, allowlist, `mem_limit`) dans `run_tests`, au lieu de `subprocess.run(sys.executable)` sur l'hôte. Le sandbox est construit ; l'écart est un non-câblage, pas un manque. Sans ce point, un correcteur démontre l'exfiltration en direct via les clés API chargées dans `os.environ`.
 3. **Corriger le timeout global** — remplacer `10 × len(test_list)` *par processus* par un budget global (le pire-cas actuel de 10N² s fait déborder le 120 s §VI.1.1 dès 3-4 tests).
-4. **Supprimer les faux positifs restants** — preuve d'exécution de l'assertion (contre `sys.exit(0)`). Un faux positif se paie par une tâche entière, et le seuil MBPP est 4/5.
+4. **Fermer les faux positifs restants** — le `except SystemExit` du 20/08 réduit mais ne clôt pas le cas `sys.exit(0)` (en tête de module) ni `os._exit(0)` (vérifié : les deux passent toujours). Une preuve d'exécution de l'assertion (marqueur écrit après l'assertion, seul accepté) reste nécessaire. Un faux positif se paie par une tâche entière, et le seuil MBPP est 4/5.
 5. **Renvoyer la cause de l'échec** (dernière ligne de traceback) — le meilleur rapport gain/effort sur le budget de 10 itérations et 6 000 tokens.
 6. **Ajouter un garde-fou sur les limites cumulées côté agent** — un équivalent de `MetricsLimits`, vérifié *avant* chaque requête, pas seulement par la moulinette après coup. C'est le prérequis pour que la boucle (priorité 1) ne dérape pas.
 7. **Nettoyage de conformité** : ressources/prompts MCP (`mbpp://task`, prompt de résolution), utilisation de `function_definition` dans le prompt et la vérification, ancrage de `system_prompt` comme obligatoire.

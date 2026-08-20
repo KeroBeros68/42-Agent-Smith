@@ -60,6 +60,10 @@ def run_tests(code: str) -> str:
 
     imports = "\n".join(TASK.test_imports)
 
+    # Create a patch string to override the os._exit() function to prevent false postive tests.
+    # This string will be injecte in the code, making os._exit() unusable.
+    OS_EXIT_PATCH = 'import os\ndef PATCH_EXIT(status):\n    sys.exit(1)\nos._exit = PATCH_EXIT'
+
     # First, check if the syntax is correct
     try:
         compile(f"{imports}\n\n{code}", "<mbpp_solution>", "exec")
@@ -79,11 +83,7 @@ def run_tests(code: str) -> str:
                 [
                     sys.executable,
                     "-c",
-                    # Convert any SystemExit (sys.exit/exit/quit) in the
-                    # submitted code into a nonzero exit so it can't fake a
-                    # pass (a bare sys.exit(0) would otherwise exit 0 before
-                    # the assertion ever runs).
-                    f"import sys\n{imports}\n\n{code}\n\n"
+                    f"import sys\n{imports}{OS_EXIT_PATCH}\n\n{code}\n\n"
                     f"try:\n    {test}\nexcept SystemExit:\n    sys.exit(1)\n",
                 ],
                 timeout=TIMEOUT_DELAY_SEC * len(TASK.test_list),
