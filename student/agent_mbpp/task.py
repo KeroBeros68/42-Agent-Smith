@@ -4,12 +4,13 @@ Mirrors ``moulinette.models_public.MBPPTaskInput`` so the agent and the
 evaluation contract share the same schema.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from agent_core.schemas import TaskInput
 
 
-class MBPPTaskInput(BaseModel):
-    """Input for an MBPP task.
-    """
+class MBPPTaskInput(TaskInput):
+    """Input for an MBPP task."""
 
     task_id: int = Field(..., description="MBPP task identifier (integer)")
     task_definition: str = Field(
@@ -24,9 +25,7 @@ class MBPPTaskInput(BaseModel):
     )
     test_imports: list[str] = Field(
         default_factory=list,
-        description=(
-            "Import statements needed to run the public tests"
-        ),
+        description="Import statements needed to run the public tests",
     )
     test_list: list[str] = Field(
         default_factory=list,

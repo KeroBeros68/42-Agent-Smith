@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from fastmcp import FastMCP
 from pydantic import ValidationError
 
-from student.data_models import SWEBenchTaskInput
+from student.agent_swebench.task import SWEBenchTaskInput
 
 
 class SWEException(Exception):

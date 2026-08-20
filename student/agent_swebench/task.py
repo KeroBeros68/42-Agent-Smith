@@ -4,10 +4,12 @@ Mirrors ``moulinette.models_public.SWEBenchTaskInput`` so the agent and the
 evaluation contract share the same schema.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from agent_core.schemas import TaskInput
 
 
-class SWEBenchTaskInput(BaseModel):
+class SWEBenchTaskInput(TaskInput):
     """Input for a SWE-bench task — provided by the moulinette.
 
     Your agent receives this and must produce a git patch that fixes the
@@ -22,9 +24,7 @@ class SWEBenchTaskInput(BaseModel):
     )
     problem_statement: str = Field(
         ...,
-        description=(
-            "The GitHub issue description — what needs to be fixed"
-        ),
+        description="The GitHub issue description — what needs to be fixed",
     )
     docker_image: str = Field(
         ...,

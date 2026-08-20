@@ -1,9 +1,10 @@
 # Audit — Partie Agent Core
 
-> Audit de conformité de `student/agent_core/` (+ `student/data_models/`, dépendance étroitement couplée) par rapport au sujet officiel (`subject-1-1.txt`, v1.1) et au `CAHIER_DES_CHARGES.md`.
+> Audit de conformité de `student/agent_core/` (+ `student/agent_mbpp/task.py`, `student/agent_swebench/task.py`, dépendances étroitement couplées) par rapport au sujet officiel (`subject-1-1.txt`, v1.1) et au `CAHIER_DES_CHARGES.md`.
 >
 > **Date de l'audit** : 2026-08-20
-> **Périmètre** : `student/agent_core/` (tous fichiers) + `student/data_models/` (contrat de données partagé, revu ici car directement impliqué dans les bugs trouvés)
+> **Mise à jour du 2026-08-20** : `student/data_models/` (le contrat de données partagé, initialement dans le périmètre) a été démantelé pendant cette même session — voir « Corrigés ». Les modèles vivent maintenant dans `agent_core/schemas.py`, `agent_mbpp/task.py`, `agent_swebench/task.py`.
+> **Périmètre** : `student/agent_core/` (tous fichiers, y compris `schemas.py`) + `student/agent_mbpp/task.py` + `student/agent_swebench/task.py`
 > **Méthode** : 5 points positifs max et 5 points négatifs max par fichier/module, chacun justifié par référence au sujet, par mypy/flake8, ou par test réel. Même méthodologie que `AUDIT_SANDBOX.md`.
 
 ---
@@ -61,19 +62,29 @@ Tous les quatre sont encore des stubs — uniquement le docstring d'intention po
 
 Point notable : **le sandbox lui-même (côté `student/sandbox/`) est fonctionnel et testé de bout en bout** (voir `AUDIT_SANDBOX.md`) — connexion MCP, restrictions, watchdog, relais `tool_call`, tout marche en conditions Docker réelles. Rien de tout ça n'est encore branché à un appel LLM réel : la pièce manquante est exactement cette boucle.
 
+Depuis le 2026-08-20, `agent_mbpp/` et `agent_swebench/` ne sont plus des répertoires complètement vides — chacun contient un `task.py` (le modèle de tâche spécifique, déplacé depuis `data_models/`, voir plus bas) — mais toujours aucun CLI/`__main__.py`, donc les 3 commandes du §V.3.1/§V.4.1 restent inexistantes.
+
 ---
 
-## `data_models/`
+## `data_models/` — démantelé le 2026-08-20
 
-### ✅ Bon
+*(Section conservée à titre d'historique — le paquet n'existe plus, voir « Corrigés » ci-dessous.)*
 
-1. **Package sans aucune dépendance** (ni `sandbox`, ni `agent_core`) — n'importe quelle future pièce du projet (ex: un outil de génération de `BENCHMARK_REPORT.md`, §V.7) peut valider un `SolutionOutput` sans importer toute la logique de boucle/provider.
-2. **`SolutionOutput.steps: list[StepMetrics]`** avec agrégats (`total_requests`, `total_input_tokens`, `total_output_tokens`, `iterations`) — modélise correctement la relation "un `StepMetrics` par itération" attendue par le sujet.
-3. **Schémas alignés avec `moulinette.models_public`** (mentionné explicitement dans chaque docstring) — réduit le risque de divergence silencieuse avec ce que la moulinette attend réellement en validation.
+Ce package regroupait initialement les 4 modèles du contrat d'évaluation (`MBPPTaskInput`, `SWEBenchTaskInput`, `StepMetrics`, `SolutionOutput`), au prix d'une contradiction avec le découpage générique/spécifique posé au tout début du projet (`agent_core/schemas.py` prévoyait `StepMetrics`/`SolutionOutput` partagés, `MBPPTaskInput`/`SWEBenchTaskInput` spécifiques à chaque benchmark). Les 3 points positifs qu'il avait (package sans dépendance, `steps: list[StepMetrics]` bien typé, schémas alignés sur `moulinette.models_public`) s'appliquent maintenant à `agent_core/schemas.py` — voir la section dédiée plus bas.
 
-### ❌ Mauvais
+### `agent_core/schemas.py` (nouveau, remplace `data_models/`)
 
-Aucun point ouvert — le seul bug trouvé (voir ci-dessous) a été corrigé pendant cette session.
+#### ✅ Bon
+
+1. **`TaskInput` comme simple marqueur, pas une fausse abstraction.** `MBPPTaskInput` et `SWEBenchTaskInput` ne partagent aucun nom de champ ni type (`task_id: int` vs `instance_id: str`) — plutôt que d'inventer des champs communs artificiels, `TaskInput` reste une classe vide, utile uniquement pour le typage générique côté `loop.py` (`def run(task: TaskInput, ...)`).
+2. **Package toujours sans dépendance** (ni `sandbox`, ni le reste d'`agent_core`) — hérité de `data_models`, préservé après la restructuration.
+3. **`SolutionOutput.steps: list[StepMetrics]`** avec agrégats (`total_requests`, `total_input_tokens`, `total_output_tokens`, `iterations`) — modélise correctement la relation "un `StepMetrics` par itération" attendue par le sujet.
+4. **Schémas alignés avec `moulinette.models_public`** (mentionné explicitement dans le docstring) — réduit le risque de divergence silencieuse avec ce que la moulinette attend réellement en validation.
+5. **`MBPPTaskInput`/`SWEBenchTaskInput` héritent explicitement de `TaskInput`** (`agent_mbpp/task.py`, `agent_swebench/task.py`) — la dépendance va dans le bon sens (spécifique → générique), jamais l'inverse. Vérifié : `issubclass(MBPPTaskInput, TaskInput)` et `issubclass(SWEBenchTaskInput, TaskInput)` retournent `True`.
+
+#### ❌ Mauvais
+
+Aucun point ouvert.
 
 ---
 
@@ -83,6 +94,7 @@ Aucun point ouvert — le seul bug trouvé (voir ci-dessous) a été corrigé pe
 |---|---|---|
 | `data_models/__init__.py` important via `from student.data_models.X import Y` — `student` n'est pas un package top-level une fois `student` installé comme paquet (seuls `sandbox`, `agent_core`, `data_models` le sont individuellement). Bloquait **tout** import de `data_models`, donc `agent_core.provider` aussi, dès qu'invoqué autrement qu'en script depuis la racine du dépôt. | `data_models/__init__.py` | Imports internes changés en `from data_models.X import Y`, cohérent avec la convention déjà utilisée dans `sandbox/`. Vérifié dans les deux contextes : `import data_models` (depuis `student/`) et `from student.data_models import X` (depuis la racine, utilisé par `mcp_tools_*.py`) fonctionnent tous les deux. |
 | `agent_core/llm.py` — hors de la structure `provider(s)/` prévue dès le début du projet, faisait doublon avec un dossier `provider/` vide déjà présent (non suivi par git) | `agent_core/provider/base.py` (déplacé), `agent_core/provider/__init__.py` (rempli) | Contenu déplacé tel quel (aucune logique modifiée), `__init__.py` exporte `AbstractLLM`, `LLM`, `LLMError` |
+| `data_models/` centralisait les 4 modèles du contrat, en contradiction avec le découpage générique/spécifique posé au début du projet (`agent_core/schemas.py` prévoyait `StepMetrics`/`SolutionOutput` partagés, `MBPPTaskInput`/`SWEBenchTaskInput` spécifiques) — contradiction déjà signalée dans `AUDIT_MBPP.md` | `agent_core/schemas.py` (recréé : `TaskInput`, `StepMetrics`, `SolutionOutput`), `agent_mbpp/task.py` (nouveau : `MBPPTaskInput`), `agent_swebench/task.py` (nouveau : `SWEBenchTaskInput`), `data_models/` supprimé | 3 imports mis à jour (`mcp_tools_mbpp.py`, `mcp_tools_swebench.py`, `provider/base.py`), `pyproject.toml` nettoyé. Vérifié dans les deux sens : import en paquet installé (`agent_mbpp.task`) et depuis la racine (`student.agent_mbpp.task`, utilisé par `mcp_tools_mbpp.py`) ; `mypy`/`flake8` sans nouvelle erreur ; `mcp_tools_mbpp.py` démarre sans `ModuleNotFoundError` |
 
 ---
 

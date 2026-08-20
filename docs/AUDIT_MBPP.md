@@ -4,8 +4,8 @@
 >
 > **Date de l'audit** : 2026-08-16
 > **Dernière révision** : 2026-08-16 — reflet de l'état du dépôt après les commits SWE-bench (`agent_core/` construit, `sandbox/` câblé, MCP SWE-Bench ajouté).
-> **Correction du 2026-08-20** : la priorité n°1 (build du wheel cassé) était factuellement inexacte — `uv build --wheel` réussit réellement (vérifié) ; les répertoires `agent_mbpp`/`agent_swebench` existent mais sont vides, ils n'ont pas disparu. Corrigé au préambule, au récapitulatif et en priorités ; le reste du document (points ✅/❌ sur `mcp_tools_mbpp.py`, `data_models/`) reste vérifié et à jour à cette date. Ce document ne couvre pas `agent_core/provider/` (créé le 18/08) ni l'état final du sandbox (relais `tool_call`, watchdog, builtins restreints, tous terminés après le 16/08) — voir `AUDIT_AGENT_CORE.md` et `AUDIT_SANDBOX.md` pour ces parties.
-> **Périmètre** : `mcp_tools_mbpp.py` (§V.3.2), `student/data_models/` (§V.3.3), `student/agent_core/` et `student/sandbox/` (§IV, §V.2)
+> **Corrections du 2026-08-20** : (1) la priorité n°1 (build du wheel cassé) était factuellement inexacte — `uv build --wheel` réussit réellement (vérifié) ; les répertoires `agent_mbpp`/`agent_swebench` existent mais sont vides, ils n'ont pas disparu. Corrigé au préambule, au récapitulatif et en priorités. (2) `student/data_models/` a été démantelé — la contradiction que ce document signalait entre lui et `agent_core/schemas.py` (point ❌1 de la section `data_models/__init__.py`) est résolue en tranchant en faveur du découpage d'origine : `StepMetrics`/`SolutionOutput` dans `agent_core/schemas.py`, `MBPPTaskInput`/`SWEBenchTaskInput` dans `agent_mbpp/task.py`/`agent_swebench/task.py`. Les sections concernées ont été retitrées et une note ajoutée sous `data_models/`. Le reste du document (points ✅/❌ sur `mcp_tools_mbpp.py`) reste vérifié et à jour à sa date d'origine. Ce document ne couvre pas `agent_core/provider/` (créé le 18/08) ni l'état final du sandbox (relais `tool_call`, watchdog, builtins restreints, tous terminés après le 16/08) — voir `AUDIT_AGENT_CORE.md` et `AUDIT_SANDBOX.md` pour ces parties.
+> **Périmètre** : `mcp_tools_mbpp.py` (§V.3.2), les modèles du contrat d'évaluation — `student/agent_core/schemas.py`, `student/agent_mbpp/task.py` (§V.3.3, déplacés depuis `data_models/` le 2026-08-20) —, `student/agent_core/` et `student/sandbox/` (§IV, §V.2)
 > **Méthode** : 5 points positifs max et 5 points négatifs max par fichier, chacun justifié par référence au sujet **ou par un comportement observé** — chaque affirmation marquée « vérifié » a été reproduite en lançant réellement le serveur MCP en stdio et en lui envoyant du JSON-RPC.
 
 ---
@@ -58,7 +58,7 @@ La tension du §V.2.5 (« MCP tool actions happen outside the sandbox ») justif
 
 ---
 
-## `student/data_models/mbpp_task.py`
+## `student/agent_mbpp/task.py` (déplacé depuis `data_models/mbpp_task.py` le 2026-08-20)
 
 ### ✅ Bon
 
@@ -84,7 +84,7 @@ La tension du §V.2.5 (« MCP tool actions happen outside the sandbox ») justif
 
 ---
 
-## `student/data_models/step_metrics.py`
+## `student/agent_core/schemas.py` — `StepMetrics` (déplacé depuis `data_models/step_metrics.py` le 2026-08-20)
 
 ### ✅ Bon
 
@@ -110,7 +110,7 @@ La tension du §V.2.5 (« MCP tool actions happen outside the sandbox ») justif
 
 ---
 
-## `student/data_models/solution.py`
+## `student/agent_core/schemas.py` — `SolutionOutput` (déplacé depuis `data_models/solution.py` le 2026-08-20)
 
 ### ✅ Bon
 
@@ -138,22 +138,13 @@ La tension du §V.2.5 (« MCP tool actions happen outside the sandbox ») justif
 
 ---
 
-## `student/data_models/__init__.py`
+## `student/data_models/` — supprimé le 2026-08-20, contradiction résolue
 
-### ✅ Bon
+*(Section conservée à titre d'historique — le paquet n'existe plus.)*
 
-1. **Point d'entrée unique et stable** — `from student.data_models import MBPPTaskInput` (déjà utilisé en `mcp_tools_mbpp.py:17`) découple les consommateurs du découpage en fichiers. Le paquet s'est élargi proprement avec `SWEBenchTaskInput` (cf. §V.4) sans toucher à l'interface existante.
-2. **`__all__` explicite** — l'API publique du paquet est déclarée, pas déduite ; linters, `import *` et vérificateurs de types s'accordent sur la même liste.
-3. **Le docstring justifie une décision d'architecture réelle** : `SandboxConfig` est délibérément hors de ce paquet, parce qu'il configure le sandbox et ne fait pas partie du contrat d'évaluation. C'est exactement le type de choix que le §VI.4 demande de savoir défendre, écrit à l'endroit où un correcteur ira le chercher — d'autant que le sandbox a désormais une vraie existence (`student/sandbox/config.py`), ce qui rend la justification encore plus solide.
-4. **Un modèle par fichier plutôt qu'un `models.py` monolithique** — les modèles §V.3 et §V.4 restent séparément lisibles et diffables, et le fichier partagé (`step_metrics.py`) apparaît explicitement comme partagé.
+Le point ❌1 ci-dessous annonçait que la contradiction entre `agent_core/schemas.py` (qui revendiquait `StepMetrics`/`SolutionOutput`, et plaçait `MBPPTaskInput`/`SWEBenchTaskInput` dans `agent_mbpp`/`agent_swebench`) et `data_models/` (qui avait tout centralisé) devait être tranchée. C'est fait : `data_models/` a été démantelé et chaque modèle redéplacé exactement là où `agent_core/schemas.py` le décrivait à l'origine (voir plus bas, sections `agent_core/schemas.py`, `agent_mbpp/task.py`, `agent_swebench/task.py`). Le point ❌2 (deux racines d'import incompatibles, `student.data_models` vs `sandbox.*`) est résolu par la même occasion : les nouveaux fichiers importent tous en `from agent_core.schemas import TaskInput` (plat, sans préfixe `student.`), cohérent avec `sandbox/`. Vérifié dans les deux sens après la restructuration : `import agent_mbpp.task` (paquet installé) et `from student.agent_mbpp.task import MBPPTaskInput` (depuis la racine, utilisé par `mcp_tools_mbpp.py`) fonctionnent tous les deux, sans le conflit mypy *"Source file found twice under different module names"* observé précédemment.
 
-### ❌ Mauvais
-
-1. **La contradiction avec `student/agent_core/schemas.py` persiste — et s'aggrave avec la construction d'`agent_core/`.** `agent_core/schemas.py` affirme dans son docstring héberger `StepMetrics` et `SolutionOutput`, et placer `MBPPTaskInput`/`SWEBenchTaskInput` « dans leurs paquets `agent_mbpp`/`agent_swebench` respectifs ». Les quatre modèles sont en réalité dans `data_models`, et `agent_mbpp`/`agent_swebench` n'existent même plus. Deux fichiers décrivent donc deux architectures incompatibles, et le stub n'a plus aucune raison d'exister — d'autant que `agent_core/` est maintenant le cœur partagé affiché au §IV.2. En soutenance, où l'architecture est notée (§VI.4), ce fichier oriente le correcteur vers une question à laquelle il n'y a pas de bonne réponse : soit il cède (les modèles « revendiqués » ailleurs), soit il pointe vers des packages absents.
-
-2. **Deux racines d'import incompatibles cohabitent dans le dépôt.** Ce paquet s'auto-importe en absolu (`from student.data_models.mbpp_task import ...`), donc il n'existe que sous le nom `student.data_models` ; `student/sandbox/` importe au contraire `sandbox.*` en top-level (`cli.py:17`), parce que `pyproject.toml` mappe `student/sandbox` → `sandbox` à la construction du wheel. Conséquence mesurable : mypy refuse d'analyser l'arbre (vérifié — `Source file found twice under different module names: "data_models" and "student.data_models"`), donc `make lint-strict` ne couvre pas ces fichiers. Des imports relatifs (`from .mbpp_task import ...`) suppriment la moitié du problème ; il reste à trancher une convention unique pour tout `student/`.
-
-3. **`student/` n'a pas d'`__init__.py`** — c'est un paquet-espace-de-noms implicite qui ne fonctionne que parce que `sys.path[0]` est le répertoire du script lancé (vérifié : l'import passe depuis n'importe quel cwd tant que `mcp_tools_mbpp.py` est lancé par son chemin). Ça tient aujourd'hui, mais ça repose sur une propriété du lanceur, pas sur une déclaration du projet — et c'est la cause directe du point précédent.
+Le point ❌3 (`student/` sans `__init__.py`, paquet-espace-de-noms implicite) reste vrai en tant que tel — mais n'est plus spécifique à `data_models`, c'était déjà une propriété générale du dépôt.
 
 ---
 
@@ -187,7 +178,7 @@ Par ordre d'impact sur la note — **l'ordre a changé depuis le 14/08** :
 4. **Supprimer les faux positifs restants** — preuve d'exécution de l'assertion (contre `sys.exit(0)`). Un faux positif se paie par une tâche entière, et le seuil MBPP est 4/5.
 5. **Renvoyer la cause de l'échec** (dernière ligne de traceback) — le meilleur rapport gain/effort sur le budget de 10 itérations et 6 000 tokens.
 6. **Écrire `agent_mbpp/__main__.py`** (ou équivalent dans `agent_core`) avec `max_iterations` configurable et un garde-fou sur les limites cumulées ; sans lui, aucune des trois commandes du §V.3.1 ne s'exécute.
-7. **Nettoyage de conformité** : ressources/prompts MCP, suppression du bloc de debug commenté **et** de la ligne de transport hors norme (les deux cassent `make lint`), résolution de la contradiction `agent_core/schemas.py` ↔ `data_models/`.
+7. **Nettoyage de conformité** : ressources/prompts MCP, suppression du bloc de debug commenté **et** de la ligne de transport hors norme (les deux cassent `make lint`). ~~résolution de la contradiction `agent_core/schemas.py` ↔ `data_models/`~~ — fait le 2026-08-20, `data_models/` supprimé, modèles redéplacés vers `agent_core/schemas.py`/`agent_mbpp/task.py`/`agent_swebench/task.py`.
 
 ---
 

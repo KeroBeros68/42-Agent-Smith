@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 import os
 import time
 
-from data_models.step_metrics import StepMetrics
+from agent_core.schemas import StepMetrics
 from litellm.router import Router
 
 
