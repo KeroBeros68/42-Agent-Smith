@@ -3,12 +3,18 @@ This file contains an MCP server build with FastMCP.
 
 It contains useful tools that can be used in the agentic loop
 for the Agent Smith project.
+
+[!] Important notice :
+- Needs a MBPPTaskInput set in the env variable "MBPP_TASK_JSON"
+- Needs a transport value set in the env variable "MCP_TRANSPORT"
+    e.g: 'http' or 'stdio'. defaults to 'stdio'
 """
 
 import json
 import os
 import subprocess
 import sys
+from typing import Literal
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
@@ -36,6 +42,14 @@ try:
 except (ValidationError, json.JSONDecodeError):
     TASK = None
 
+if TASK is None:
+    print(
+        "Could not load the task. Please restart "
+        "the MCP server with a valid MBPPTaskInput in the "
+        "MBPP_TASK_JSON env variable.",
+        file=sys.stderr,
+    )
+
 TIMEOUT_DELAY_SEC = 10
 
 # --- MCP Tools ---
@@ -56,21 +70,25 @@ def run_tests(code: str) -> str:
         )
 
     if len(TASK.test_list) == 0:
-        return "There are no available tests for this task. You may skip testing."
+        return ("There are no available tests for this task. "
+                "You may skip testing.")
 
     imports = "\n".join(TASK.test_imports)
 
-    # Create a patch string to override the os._exit() function to prevent false postive tests.
+    # Create a patch string to override the os._exit() function to
+    # prevent false postive tests.
     # This string will be injecte in the code, making os._exit() unusable.
-    OS_EXIT_PATCH = 'import os\n\ndef PATCH_EXIT(status):\n    sys.exit(1)\nos._exit = PATCH_EXIT\n'
+    OS_EXIT_PATCH = (
+        "import os\n\ndef PATCH_EXIT(status):\n"
+        "    sys.exit(1)\nos._exit = PATCH_EXIT\n"
+    )
 
     # First, check if the syntax is correct
     try:
         compile(f"{imports}\n\n{code}", "<mbpp_solution>", "exec")
     except SyntaxError as e:
-        loc = (
-            f"line {e.lineno}" if e.lineno is not None else "unknown location"
-        )
+        loc = f"line {e.lineno}" if e.lineno is not None else ("unknown"
+                                                               " location")
         return (
             f"SyntaxError in the submitted code: {e.msg} at {loc}. "
             f"Fix it and retry — tests cannot run against invalid Python."
@@ -86,7 +104,8 @@ def run_tests(code: str) -> str:
                 [
                     sys.executable,
                     "-c",
-                    f"import sys\n{imports}\n{OS_EXIT_PATCH}\ntry:\n{indented_code}\n\n"
+                    f"import sys\n{imports}\n{OS_EXIT_PATCH}\n"
+                    f"try:\n{indented_code}\n\n"
                     f"    {test}\nexcept SystemExit:\n    sys.exit(1)\n",
                 ],
                 timeout=TIMEOUT_DELAY_SEC,
@@ -95,11 +114,19 @@ def run_tests(code: str) -> str:
                 text=True,
             )
             if proc.returncode != 0:
-                failed_tests.append(f"{test}")
+                # Test failed. Add details to the error
+                #   (e.g NameError: name 'sub_list' is not defined)
+                # and save the error to the list of fails.
+                tb_lines = (proc.stderr or "").rstrip("\n").splitlines()
+                reason = (
+                    tb_lines[-1].strip()
+                    if tb_lines
+                    else (f"exit code {proc.returncode}, no stderr")
+                )
+                failed_tests.append(f"{test}  # {reason[:300]}")
         except subprocess.TimeoutExpired:
-            failed_tests.append(
-                f"{test}  # TIMEDOUT AFTER {TIMEOUT_DELAY_SEC} SECONDS"
-            )
+            failed_tests.append(f"{test}  # TIMEDOUT AFTER "
+                                f"{TIMEOUT_DELAY_SEC} SECONDS")
     if len(failed_tests) != 0:
         return "Error during the following tests :\n" + "\n".join(failed_tests)
     return "All test passed successfully !"
@@ -107,11 +134,19 @@ def run_tests(code: str) -> str:
 
 if __name__ == "__main__":
     # Get transport mode from env variable MCP_TRANSPORT
-    transport_mode = os.environ.get("MCP_TRANSPORT", "null")
+    transport_mode = os.environ.get("MCP_TRANSPORT", "stdio")
 
     # Verify transport mode
-    if transport_mode != 'http' and transport_mode != 'stdio':
-        raise TypeError(f'Wrong transport mode ("{transport_mode}") provided in the env variable "MCP_TRANSPORT".')
+    if transport_mode != "http" and transport_mode != "stdio":
+        raise TypeError(
+            f'Wrong transport mode ("{transport_mode}") '
+            'provided in the env variable "MCP_TRANSPORT".'
+        )
+
+    # Use literal value for mypy
+    mode: Literal["http", "stdio"] = "http"
+    if transport_mode == 'stdio':
+        mode = 'stdio'
 
     # Listen
-    mcp.run(transport=transport_mode)
+    mcp.run(transport=mode)
