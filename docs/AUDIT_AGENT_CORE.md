@@ -9,9 +9,11 @@
 
 ---
 
-## ⚠️ État général : 4 modules sur 5 ont du contenu réel, et branchés ensemble
+## ⚠️ État général : 4 modules sur 5 ont du contenu réel, branchés et testés bout en bout
 
-`provider/` (LLM), `parsing.py` (format primaire seulement), `sandbox_client.py` et `loop.py` sont implémentés **et maintenant branchés entre eux** : `loop.py` appelle `extract_code()` puis `run_code()` à chaque itération et referme la boucle Thought→Code→Observation. Seul `manual.py` reste un stub. Ceci dit, **rien n'a encore été testé de bout en bout avec un vrai appel LLM + un vrai conteneur Docker** — l'analyse s'appuie sur mypy, flake8, la lecture du code, et des tests unitaires réels mais isolés (`parsing.extract_code()` contre des exemples de sortie LLM, `sandbox`/`container.py` testés en Docker réel mais séparément — voir `AUDIT_SANDBOX.md`). Le premier test d'intégration réel (LLM + sandbox + tools MCP, un vrai `loop.run()`) reste à faire.
+`provider/` (LLM), `parsing.py` (format primaire seulement), `sandbox_client.py` et `loop.py` sont implémentés et branchés entre eux. Seul `manual.py` reste un stub.
+
+**Premier test d'intégration réel effectué le 2026-08-21** : `loop.run()` contre un vrai conteneur Docker (tâche MBPP 282, `mcp_tools_mbpp.py` connecté en stdio réel, modèle `deepseek/deepseek-v4-flash` avec une vraie clé API) — 5 itérations, aucun crash, cleanup propre. Le pipeline complet (appel LLM → extraction de code → exécution sandbox → relais MCP → réinjection de l'observation) fonctionne réellement, pas seulement en théorie. Résultat notable : le LLM a régénéré la même définition de fonction 5 fois sans jamais appeler `run_tests`/`final_answer`, parce que le `system_prompt` de test (écrit à la main, `manual.py` n'existe pas) documentait le tool sans montrer d'exemple d'appel concret — confirme empiriquement l'avertissement du sujet (§V.1, lignes 202-207) sur l'écart entre un prompt vague et un prompt avec exemple de raisonnement structuré. Aucun bug de code trouvé par ce test ; la leçon retenue est pour `manual.py`, qui devra inclure un exemple concret d'appel de tool, pas seulement sa signature.
 
 ---
 
@@ -139,8 +141,7 @@ Aucun point ouvert.
 
 Par ordre d'impact :
 
-1. **Premier test d'intégration réel** — `loop.run()` contre un vrai conteneur (`session.build_container`) + un vrai appel LLM (clé API réelle), au moins une tâche MBPP simple, pour vérifier que le branchage marche vraiment et pas seulement en théorie (le blocage `MCP_TRANSPORT` qui l'empêchait est réglé, voir `AUDIT_SANDBOX.md`)
-2. **`manual.py`** ensuite — génération du system prompt depuis les schémas MCP ; garder en tête le risque de double `list_tools()` avec `session.build_container()` (voir échange précédent)
-3. **Assembler `SolutionOutput`** — possible dès maintenant côté `agent_mbpp`/`agent_swebench` (les deux CLI n'existent pas encore, voir plus bas), en enveloppant `loop.run()`
-4. **Distinguer "aucun bloc trouvé" de "bloc malformé mais interprété"** dans `parsing.py`/`loop.py` (2e cas de feedback explicite du sujet, §V.1) — actuellement seul le premier cas existe
-5. **Formats (b)/(c)/(d) de `parsing.py`** (XML, JSON/Hermes, ReAct) — une fois le format primaire prouvé bout en bout avec un vrai LLM
+1. **`manual.py`** — génération du system prompt depuis les schémas MCP, **avec au moins un exemple concret d'appel de tool** (pas seulement sa signature) : le premier test d'intégration réel (voir ci-dessus) montre que sans exemple, le LLM ne déclenche jamais `run_tests`/`final_answer` et boucle sur la même réponse. Garder en tête le risque de double `list_tools()` avec `session.build_container()` (voir échange précédent).
+2. **Assembler `SolutionOutput`** — côté `agent_mbpp`/`agent_swebench` (les deux CLI n'existent pas encore, voir plus bas), en enveloppant `loop.run()`
+3. **Distinguer "aucun bloc trouvé" de "bloc malformé mais interprété"** dans `parsing.py`/`loop.py` (2e cas de feedback explicite du sujet, §V.1) — actuellement seul le premier cas existe
+4. **Formats (b)/(c)/(d) de `parsing.py`** (XML, JSON/Hermes, ReAct) — une fois le format primaire prouvé bout en bout avec un vrai LLM (fait pour (a))
