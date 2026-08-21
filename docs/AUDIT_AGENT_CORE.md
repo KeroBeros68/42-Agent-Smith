@@ -45,10 +45,10 @@ Aucun point ouvert — les 3 points identifiés initialement (absence de `try/ex
 
 ### ❌ Mauvais
 
-1. **`llm.get_response()` appelé sans `try/except`** — si un `LLMError` est levé à l'itération *n*, tout `run()` plante et les `StepMetrics` des itérations 1 à *n-1* sont perdus (jamais retournés), alors que le sujet veut un `SolutionOutput.error` renseigné plutôt qu'un crash brut, avec l'historique partiel des `steps` déjà produits.
-2. **Pas de limites cumulées** (tokens totaux, temps total) — seul `max_iterations` est un paramètre ; rien n'empêche une boucle de consommer un budget de tokens disproportionné avant d'atteindre `max_iterations`.
-3. **`_format_observation` dupliquée en substance avec `repl._format_response`** — même logique (distinguer `result`/`error`/`final_answer`), deux implémentations légèrement différentes (préfixes/`\n` différents pour l'affichage humain vs le texte envoyé au LLM). Différence délibérée pour l'instant (les deux publics sont différents), mais à surveiller si elles divergent involontairement plus tard.
-4. **`code is None` renvoie toujours le même message d'observation** (« No valid code block was found in your response. ») — pas de distinction avec le deuxième cas de feedback du sujet (§V.1 : « A code block was malformed but was interpreted anyway ») ; `parsing.extract_code()` lui-même n'a pas encore cette distinction (voir sa propre section « Mauvais », point 2).
+1. **Pas de limites cumulées** (tokens totaux, temps total) — seul `max_iterations` est un paramètre ; rien n'empêche une boucle de consommer un budget de tokens disproportionné avant d'atteindre `max_iterations`.
+2. **`_format_observation` dupliquée en substance avec `repl._format_response`** — même logique (distinguer `result`/`error`/`final_answer`), deux implémentations légèrement différentes (préfixes/`\n` différents pour l'affichage humain vs le texte envoyé au LLM). Différence délibérée pour l'instant (les deux publics sont différents), mais à surveiller si elles divergent involontairement plus tard.
+3. **`code is None` renvoie toujours le même message d'observation** (« No valid code block was found in your response. ») — pas de distinction avec le deuxième cas de feedback du sujet (§V.1 : « A code block was malformed but was interpreted anyway ») ; `parsing.extract_code()` lui-même n'a pas encore cette distinction (voir sa propre section « Mauvais », point 2).
+4. **Arrêt sur `LLMError` silencieux** — `break` sans logguer ni exposer pourquoi la boucle s'est arrêtée ; le retour `list[StepMetrics]` seul ne permet pas de distinguer un arrêt propre (`final_answer`/`max_iterations`) d'un échec LLM. Accepté pour l'instant (déféré à l'assemblage futur de `SolutionOutput`), mais à garder en tête.
 
 ---
 
@@ -131,6 +131,7 @@ Aucun point ouvert.
 | `sandbox_client.run_code()` sans `try/except` autour de `container.send()`/`relay_tool_calls()` — une perte de connexion au conteneur remontait brute jusqu'à `loop.py` | `agent_core/sandbox_client.py` | `try/except (ConnectionError, TimeoutError)` autour de l'appel, remballé dans le même format que `protocol.ErrorMessage` (`type, error_type, message, traceback`) plutôt qu'un type de retour différent — `loop.py` n'aura jamais à distinguer "erreur du code exécuté" de "connexion perdue", les deux sont des `dict` de type `error`. Vérifié : `mypy sandbox agent_core` (0 erreur) et `flake8 agent_core/sandbox_client.py` (0 warning). |
 | `agent_core/parsing.py` était un stub — aucun moyen d'extraire du code exécutable depuis `metrics.llm_output` | `agent_core/parsing.py` (nouveau : `extract_code(llm_output) -> str \| None`) | Format primaire du sujet seulement (blocs ```` ```python ... ``` ````), formats (b)/(c)/(d) déférés. `None` explicite si aucun bloc trouvé (§V.1). Testé contre l'exemple réel du sujet, l'absence de bloc, le marqueur `<end_code>`, et un bloc multi-lignes — 4/4 corrects. |
 | `loop.py`/`parsing.py`/`sandbox_client.py` existaient mais n'étaient jamais appelés ensemble — la boucle Thought→Code→Observation n'était pas fermée (aucun message `role: "user"` jamais ajouté) | `agent_core/loop.py` | `run()` prend maintenant `container`/`mcp_bridge` en paramètres, appelle `extract_code()` puis `run_code()` à chaque itération, réinjecte l'observation formatée (`_format_observation`) comme message `role: "user"`, s'arrête sur `final_answer`. Vérifié : `mypy sandbox agent_core` (0 erreur) et `flake8 agent_core/loop.py` (0 warning). |
+| `llm.get_response()` appelé sans `try/except` dans `loop.py` — un `LLMError` à l'itération *n* faisait planter tout `run()`, perdant les `StepMetrics` des itérations 1 à *n-1* | `agent_core/loop.py` | `try/except LLMError: break` autour de l'appel — sort proprement de la boucle en gardant les `steps` déjà accumulés au lieu de tout perdre. Limite connue documentée dans le docstring plutôt que cachée : le retour ne permet pas encore de distinguer un arrêt propre d'un échec (déféré à l'assemblage futur de `SolutionOutput`). Vérifié : `mypy sandbox agent_core` (0 erreur) et `flake8 agent_core/loop.py` (0 warning). |
 
 ---
 
@@ -138,9 +139,8 @@ Aucun point ouvert.
 
 Par ordre d'impact :
 
-1. **Premier test d'intégration réel** — `loop.run()` contre un vrai conteneur (`session.build_container`) + un vrai appel LLM (clé API réelle), au moins une tâche MBPP simple, pour vérifier que le branchage marche vraiment et pas seulement en théorie
-2. **Ajouter le `try/except` autour de `llm.get_response()` dans `loop.py`** — pour que les `steps` déjà produits ne soient pas perdus si une itération échoue
-3. **`manual.py`** ensuite — génération du system prompt depuis les schémas MCP ; garder en tête le risque de double `list_tools()` avec `session.build_container()` (voir échange précédent)
-4. **Assembler `SolutionOutput`** — possible dès maintenant côté `agent_mbpp`/`agent_swebench` (les deux CLI n'existent pas encore, voir plus bas), en enveloppant `loop.run()`
-5. **Distinguer "aucun bloc trouvé" de "bloc malformé mais interprété"** dans `parsing.py`/`loop.py` (2e cas de feedback explicite du sujet, §V.1) — actuellement seul le premier cas existe
-6. **Formats (b)/(c)/(d) de `parsing.py`** (XML, JSON/Hermes, ReAct) — une fois le format primaire prouvé bout en bout avec un vrai LLM
+1. **Premier test d'intégration réel** — `loop.run()` contre un vrai conteneur (`session.build_container`) + un vrai appel LLM (clé API réelle), au moins une tâche MBPP simple, pour vérifier que le branchage marche vraiment et pas seulement en théorie (le blocage `MCP_TRANSPORT` qui l'empêchait est réglé, voir `AUDIT_SANDBOX.md`)
+2. **`manual.py`** ensuite — génération du system prompt depuis les schémas MCP ; garder en tête le risque de double `list_tools()` avec `session.build_container()` (voir échange précédent)
+3. **Assembler `SolutionOutput`** — possible dès maintenant côté `agent_mbpp`/`agent_swebench` (les deux CLI n'existent pas encore, voir plus bas), en enveloppant `loop.run()`
+4. **Distinguer "aucun bloc trouvé" de "bloc malformé mais interprété"** dans `parsing.py`/`loop.py` (2e cas de feedback explicite du sujet, §V.1) — actuellement seul le premier cas existe
+5. **Formats (b)/(c)/(d) de `parsing.py`** (XML, JSON/Hermes, ReAct) — une fois le format primaire prouvé bout en bout avec un vrai LLM

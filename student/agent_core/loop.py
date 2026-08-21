@@ -5,7 +5,7 @@ and a sandbox connection. Must not contain MBPP- or SWE-bench-specific logic.
 """
 
 from agent_core.parsing import extract_code
-from agent_core.provider import LLM
+from agent_core.provider import LLM, LLMError
 from agent_core.sandbox_client import run_code
 from agent_core.schemas import StepMetrics
 from sandbox.container import SandboxContainer
@@ -21,16 +21,21 @@ def run(
 ) -> list[StepMetrics]:
     """Run the agent loop and return the per-step metrics.
 
-    Stops early on final_answer; otherwise runs for max_iterations. No
-    cumulative token/time limit yet, and a failing LLM call still loses
-    the current step (loop.py doesn't catch LLMError yet).
+    Stops early on final_answer, or if the LLM call itself fails
+    (LLMError) — in both cases the steps already collected are kept and
+    returned rather than lost. The caller can't yet distinguish a clean
+    stop from a failure from the return value alone; that's deferred to
+    whoever assembles SolutionOutput. No cumulative token/time limit yet.
     """
     llm = LLM(model_name)
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     steps: list[StepMetrics] = []
 
     for step in range(1, max_iterations + 1):
-        metrics = llm.get_response(step, messages)
+        try:
+            metrics = llm.get_response(step, messages)
+        except LLMError:
+            break
         messages.append({"role": "assistant", "content": metrics.llm_output})
         steps.append(metrics)
 
