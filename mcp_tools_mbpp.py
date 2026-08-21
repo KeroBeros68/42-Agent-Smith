@@ -62,7 +62,7 @@ def run_tests(code: str) -> str:
 
     # Create a patch string to override the os._exit() function to prevent false postive tests.
     # This string will be injecte in the code, making os._exit() unusable.
-    OS_EXIT_PATCH = 'import os\ndef PATCH_EXIT(status):\n    sys.exit(1)\nos._exit = PATCH_EXIT'
+    OS_EXIT_PATCH = 'import os\n\ndef PATCH_EXIT(status):\n    sys.exit(1)\nos._exit = PATCH_EXIT\n'
 
     # First, check if the syntax is correct
     try:
@@ -76,6 +76,9 @@ def run_tests(code: str) -> str:
             f"Fix it and retry — tests cannot run against invalid Python."
         )
 
+    # Indent all lines to put the code inside a try/except
+    indented_code = "\n".join("    " + line for line in code.splitlines())
+
     # Run each unit test
     for test in TASK.test_list:
         try:
@@ -83,8 +86,8 @@ def run_tests(code: str) -> str:
                 [
                     sys.executable,
                     "-c",
-                    f"import sys\n{imports}{OS_EXIT_PATCH}\n\n{code}\n\n"
-                    f"try:\n    {test}\nexcept SystemExit:\n    sys.exit(1)\n",
+                    f"import sys\n{imports}\n{OS_EXIT_PATCH}\ntry:\n{indented_code}\n\n"
+                    f"    {test}\nexcept SystemExit:\n    sys.exit(1)\n",
                 ],
                 timeout=TIMEOUT_DELAY_SEC * len(TASK.test_list),
                 input="",
