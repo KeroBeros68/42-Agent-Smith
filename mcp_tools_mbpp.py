@@ -89,7 +89,7 @@ def run_tests(code: str) -> str:
                     f"import sys\n{imports}\n{OS_EXIT_PATCH}\ntry:\n{indented_code}\n\n"
                     f"    {test}\nexcept SystemExit:\n    sys.exit(1)\n",
                 ],
-                timeout=TIMEOUT_DELAY_SEC * len(TASK.test_list),
+                timeout=TIMEOUT_DELAY_SEC,
                 input="",
                 capture_output=True,
                 text=True,
