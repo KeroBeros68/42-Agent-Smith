@@ -9,6 +9,7 @@ import codeop
 
 from sandbox.container import SandboxContainer
 from sandbox.mcp_bridge import MCPBridge
+from sandbox.session import relay_tool_calls
 
 PRIMARY_PROMPT = ">>> "
 CONTINUATION_PROMPT = "... "
@@ -39,32 +40,6 @@ def _read_block() -> str | None:
         prompt = CONTINUATION_PROMPT
 
 
-def _relay_tool_calls(
-    container: SandboxContainer, mcp_bridge: MCPBridge | None
-) -> dict:
-    while True:
-        response = container.receive()
-        if response.get("type") != "tool_call":
-            return response
-
-        if mcp_bridge is None:
-            container.send(
-                {
-                    "type": "tool_result",
-                    "result": "error: no MCP server connected",
-                }
-            )
-            continue
-
-        try:
-            result = mcp_bridge.call_tool(
-                response["name"], response["arguments"]
-            )
-        except Exception as e:
-            result = f"error calling tool: {e}"
-        container.send({"type": "tool_result", "result": str(result)})
-
-
 def _format_response(response: dict) -> str:
     msg_type = response.get("type")
     if msg_type == "result":
@@ -93,7 +68,7 @@ def run(
 
         try:
             container.send({"type": "exec", "code": source})
-            response = _relay_tool_calls(container, mcp_bridge)
+            response = relay_tool_calls(container, mcp_bridge)
             print(_format_response(response), end="")
         except (ConnectionError, TimeoutError):
             print("Connection to container lost.")

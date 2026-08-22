@@ -7,6 +7,7 @@ talks to this bridge through the same stdio channel used for code exec.
 """
 
 import asyncio
+import os
 import shlex
 import threading
 from typing import Any
@@ -44,7 +45,11 @@ class MCPBridge:
     ) -> Any:
         if stdio_command is not None:
             command, *args = shlex.split(stdio_command)
-            return StdioTransport(command=command, args=args)
+            return StdioTransport(
+                command=command,
+                args=args,
+                env={**os.environ, "MCP_TRANSPORT": "stdio"},
+            )
         if server_url is not None:
             return server_url
         raise ValueError("MCPBridge requires stdio_command or server_url")
