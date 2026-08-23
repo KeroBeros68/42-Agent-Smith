@@ -49,14 +49,26 @@ if TASK is None:
 
 TIMEOUT_DELAY_SEC = 10
 
+# Root of the codebase the MCP server is allowed to explore.
+ROOT_DIR = '/testbed'
+
 # --- MCP Tools ---
 
 
 @mcp.tool
 def read_file(filepath: str, start_line: int, end_line: int) -> str:
     """
-    Reads a file by opening pens the given file from start_line to end_line
-    and returns the content of each line.
+    Read the content of a file from start_line to end_line, with line numbers.
+
+    Args:
+        filepath: Absolute path to the file to read.
+        start_line: First line to return (1-based, inclusive).
+        end_line: Last line to return (1-based, inclusive).
+
+    Returns:
+        The selected lines, one per line, formatted as
+        '<line_number>: <line_content>' (like `cat -n`).
+        An error message if the file cannot be read or the lines don't exist.
     """
     try:
         with open(filepath, 'r') as f:
@@ -83,8 +95,16 @@ def read_file(filepath: str, start_line: int, end_line: int) -> str:
 @mcp.tool
 def edit_file(filepath: str, old_str: str, new_str: str) -> str:
     """
-    Replace an exact string in a file with a new string. Only replaces
-    the first occurence of the string.
+    Replace the first occurrence of an exact string in a file with a new one.
+
+    Args:
+        filepath: Absolute path to the file to edit.
+        old_str: The exact string to find and replace.
+        new_str: The string to substitute in place of old_str.
+
+    Returns:
+        A confirmation message on success, or an error message if the file
+        cannot be read/written or old_str is not found in it.
     """
     try:
         # Open file
@@ -112,7 +132,16 @@ def edit_file(filepath: str, old_str: str, new_str: str) -> str:
 @mcp.tool
 def list_files(directory: str, pattern: str) -> str:
     """
-    List files in a directory matching a given pattern.
+    List files in a directory matching a given glob pattern.
+
+    Args:
+        directory: Absolute path to the directory to search.
+        pattern: Glob pattern to match filenames. To search subdirectories
+            recursively, prefix it with '**/', e.g. '**/*.py' — a bare
+            pattern like '*.py' only matches the directory's top level.
+
+    Returns:
+        The matching file paths, one per line, or a message if none match.
     """
     search_path = os.path.join(directory, pattern)
     matches = sorted(glob.glob(search_path, recursive=True))
@@ -124,22 +153,32 @@ def list_files(directory: str, pattern: str) -> str:
 @mcp.tool
 def search_code(pattern: str, file_pattern: str = "*") -> str:
     """
-    Performs a grep-like search across the
-    codebase and returns formatted matches.
+    Perform a grep-like search for a regular expression across the codebase.
+
+    Args:
+        pattern: The regular expression to search for, e.g. 'def parse'.
+        file_pattern: Glob pattern to select which files to search
+            (default '*' = every file under ROOT_DIR).
+
+    Returns:
+        The matches, one per line, formatted as
+        '/absolute/path.py:<line_number> <line_content>'.
+        An error message if the regex is invalid or ROOT_DIR does not exist,
+        or 'No matches found.' if nothing matches.
     """
-    root_dir = '/testbed'
     results = []
 
     # Verify regex is valid
     try:
+        # Create a regex object
         compiled_regex = re.compile(pattern)
     except re.error as e:
         return f"Error: Invalid regular expression pattern '{pattern}': {e}"
 
-    # Error in case that the root_dir doesn't exist
-    base_path = Path(root_dir).resolve()
+    # Error in case that the ROOT_DIR doesn't exist
+    base_path = Path(ROOT_DIR).resolve()
     if not base_path.exists():
-        return f"Error: Workspace path '{root_dir}' does not exist."
+        return f"Error: Workspace path '{ROOT_DIR}' does not exist."
 
     # Recursively match files based on file_pattern
     for file_path in base_path.rglob(file_pattern):
@@ -168,19 +207,28 @@ def search_code(pattern: str, file_pattern: str = "*") -> str:
 @mcp.tool
 def search_function_or_class_definition_in_code(name: str) -> str:
     """
-    Find the definition of a function or a class.
-    """
-    root_dir = '/testbed'
+    Find the definition line of a function or class with the given name.
 
+    Only definitions (e.g. 'def name(...)' or 'class name(...)') are matched,
+    not calls or other uses of the name. Searches Python files only.
+
+    Args:
+        name: The name of the function or class to look up.
+
+    Returns:
+        The definition, formatted as
+        '/absolute/path.py:<line_number> <line_content>'.
+        'No definition found for '<name>'.' if it is defined nowhere.
+    """
     # Create a regex pattern to match the function/class definition
     pattern = re.compile(
         rf"^\s*(?:async\s+)?(?:def|class)\s+{re.escape(name)}\b"
     )
 
-    # Error in case that the root_dir doesn't exist
-    base_path = Path(root_dir).resolve()
+    # Error in case that the ROOT_DIR doesn't exist
+    base_path = Path(ROOT_DIR).resolve()
     if not base_path.exists():
-        return f"Error: Workspace path '{root_dir}' does not exist."
+        return f"Error: Workspace path '{ROOT_DIR}' does not exist."
 
     # Start searching
     results = []
@@ -206,6 +254,61 @@ def search_function_or_class_definition_in_code(name: str) -> str:
     # Return formatted result, or clean error message
     return "\n".join(results) if results else ("No definition "
                                                f"found for '{name}'.")
+
+
+@mcp.tool
+def find_references(name: str, filepath: str, line: int) -> str:
+    """
+    Find all usages of a symbol (function or class) across the codebase.
+
+    `filepath` and `line` identify the symbol's definition site. The
+    definition line itself is excluded from the results: it is the symbol's
+    declaration, not a usage.
+    Output format is similar to search_code.
+    """
+    # Create regex to match an object name
+    # the \b correspond to a non-word char, e.g : "(", ".", etc.
+    pattern = re.compile(rf"\b{re.escape(name)}\b")
+
+    # Error in case that the ROOT_DIR doesn't exist
+    base_path = Path(ROOT_DIR).resolve()
+    if not base_path.exists():
+        return f"Error: Workspace path '{ROOT_DIR}' does not exist."
+
+    # Resolve the given path as a Path object
+    definition_path = Path(filepath).resolve()
+    if not definition_path.exists():
+        return f"Error: Path '{definition_path}' does not exist."
+
+    results = []
+    for file_path in base_path.rglob("*.py"):
+        # Skip non-files
+        if not file_path.is_file():
+            continue
+        is_definition_file = file_path.resolve() == definition_path
+        # Read file
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line_number, line_content in enumerate(f, start=1):
+                    # Skip definition line
+                    if is_definition_file and line_number == line:
+                        continue
+
+                    # Search for the pattern in this line
+                    if pattern.search(line_content):
+                        # Match found. Adding it to the results
+                        results.append(
+                            f"{file_path.resolve()}:{line_number} "
+                            f"{line_content.rstrip()}"
+                        )
+        except Exception:
+            # Skip this file in case of an error
+            continue
+
+    # Return formatted result, or clean error message
+    if not results:
+        return f"No references found for '{name}'."
+    return "\n".join(results)
 
 
 if __name__ == "__main__":
