@@ -10,6 +10,7 @@ import json
 import os
 import re
 from pathlib import Path
+import sys
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -37,6 +38,14 @@ try:
 
 except (ValidationError, json.JSONDecodeError):
     TASK = None
+
+if TASK is None:
+    print(
+        "Could not load the task. Please restart "
+        "the MCP server with a valid SWEBenchTaskInput in the "
+        "SWE_TASK_JSON env variable.",
+        file=sys.stderr,
+    )
 
 TIMEOUT_DELAY_SEC = 10
 
