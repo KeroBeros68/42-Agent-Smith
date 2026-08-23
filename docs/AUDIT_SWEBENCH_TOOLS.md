@@ -2,7 +2,7 @@
 
 > Audit de conformité du serveur MCP SWE-bench par rapport au sujet officiel (`subject-1-1.txt`, v1.1, §V.5) et au `CAHIER_DES_CHARGES.md`.
 >
-> **Date de l'audit** : 2026-08-20
+> **Date de l'audit** : 2026-08-23 (mise à jour)
 > **Périmètre** : `mcp_tools_swebench.py` (racine du dépôt)
 > **Méthode** : points positifs/négatifs justifiés par référence exacte au texte du sujet, par mypy/flake8, ou par test réel — même méthodologie que `AUDIT_SANDBOX.md`.
 
@@ -39,13 +39,15 @@
 4. **`list_files` ne recurse pas sans `**` explicite dans le pattern — vérifié empiriquement.** `glob.glob(path, recursive=True)` ne recurse que si le *pattern* contient `**` ; testé directement : `list_files("/dir", "*.py")` ne renvoie que les fichiers du niveau racine, pas des sous-dossiers, malgré `recursive=True`. Pour explorer un vrai dépôt comme `/testbed` (fichiers presque toujours dans des sous-dossiers), un agent qui appelle `list_files(dir, "*.py")` — l'usage le plus naturel — n'obtiendra presque rien.
 5. **`mcp.run(transport=transport_mode)` — mypy signale un type non garanti statiquement.** `transport_mode` est un `str` brut ; `FastMCP.run()` attend un `Literal['stdio', 'http', ...]`. La validation faite juste au-dessus (`if transport_mode != 'http' and transport_mode != 'stdio': raise`) est correcte à l'exécution, mais mypy ne peut pas la relier au type attendu sans un `Literal`/`cast` explicite. Mineur (pas un bug réel), mais empêche `mypy mcp_tools_swebench.py` d'être propre.
 
-**Détails mineurs non bloquants** : typo dans le docstring de `read_file` ("opening pens the given file") ; 11 signalements flake8, presque tous des lignes trop longues (>79 caractères) ou un espacement de 2 lignes manquant entre fonctions — aucun n'affecte le comportement.
+**Détails mineurs non bloquants** : typo dans le docstring de `read_file` ("opening pens the given file") ; 10 signalements flake8 (5 lignes trop longues `E501`, 4 espacements manquants `E302`, 1 `E303`), presque tous des lignes trop longues (>79 caractères) ou un espacement de 2 lignes manquant entre fonctions — aucun n'affecte le comportement.
 
 ---
 
 ## Dépendance externe
 
-Utilise `from student.data_models import SWEBenchTaskInput` — cette forme d'import (avec le préfixe `student.`) dépendait d'un bug dans `data_models/__init__.py` qui aurait pu la casser selon le contexte d'exécution ; corrigé pendant la session dans le cadre de l'audit `agent_core` (voir `AUDIT_AGENT_CORE.md`). Vérifié après correction : cette forme d'import fonctionne toujours depuis la racine du dépôt, contexte réel d'invocation de ce fichier.
+Importe `from student.agent_swebench.task import SWEBenchTaskInput` — un module qui **miroire `moulinette.models_public.SWEBenchTaskInput`** (hérité de `agent_core.schemas.TaskInput`) pour que l'agent et le contrat d'évaluation partagent le même schéma (§V.4). **Vérifié au moment de l'audit** : l'import fonctionne depuis la racine du dépôt, contexte réel d'invocation de ce fichier.
+
+> **Évolution depuis l'audit du 2026-08-20** : le fichier importait auparavant `from student.data_models import SWEBenchTaskInput` ; le module `student.data_models` n'existe **plus** (renommé/supprimé — `ModuleNotFoundError` confirmé empiriquement). L'ancienne section sur le bug de `data_models/__init__.py` (voir `AUDIT_AGENT_CORE.md`) ne s'applique donc plus : l'import actuel pointe vers `student/agent_swebench/task.py`, une nouvelle localisation stable et vérifiée.
 
 ---
 

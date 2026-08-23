@@ -10,6 +10,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
@@ -34,29 +35,13 @@ try:
         json.loads(os.environ.get("SWE_TASK_JSON", "null")) or {}
     )
 
-    # DEBUG TASK
-    # TASK = MBPPTaskInput.model_validate(
-    #     json.loads(
-    #         """
-    #             {
-    #             "task_id": 282,
-    #             "task_definition": "Write a function to substaract two lists using map and lambda function.",
-    #             "function_definition": "def sub_list(nums1,nums2):",
-    #             "test_imports": [],
-    #             "test_list": [
-    #                 "assert sub_list([1,2],[3,4])==[-2,-2]",
-    #                 "assert sub_list([90,120],[50,70])==[40,50]"
-    #             ]
-    #             }
-    #         """
-    #     ) or {}
-    # )
 except (ValidationError, json.JSONDecodeError):
     TASK = None
 
 TIMEOUT_DELAY_SEC = 10
 
 # --- MCP Tools ---
+
 
 @mcp.tool
 def read_file(filepath: str, start_line: int, end_line: int) -> str:
@@ -82,7 +67,9 @@ def read_file(filepath: str, start_line: int, end_line: int) -> str:
     except FileNotFoundError:
         return "File not found. Could not read this file ! (FileNotFoundError)"
     except IndexError:
-        return "Could not read the given lines. Some of these lines don't exist !"
+        return ("Could not read the given lines. Some of these lines don't "
+                "exist !")
+
 
 @mcp.tool
 def edit_file(filepath: str, old_str: str, new_str: str) -> str:
@@ -109,7 +96,9 @@ def edit_file(filepath: str, old_str: str, new_str: str) -> str:
     except FileNotFoundError:
         return "File not found. Could not read this file ! (FileNotFoundError)"
     except IndexError:
-        return "Could not read the given lines. Some of these lines don't exist !"
+        return ("Could not read the given lines. Some of these lines don't "
+                "exist !")
+
 
 @mcp.tool
 def list_files(directory: str, pattern: str) -> str:
@@ -122,19 +111,24 @@ def list_files(directory: str, pattern: str) -> str:
         return f"No files matching '{pattern}' found in {directory}."
     return "\n".join(matches)
 
+
 @mcp.tool
 def search_code(pattern: str, file_pattern: str = "*") -> str:
-    """Performs a grep-like search across the codebase and returns formatted matches."""
+    """
+    Performs a grep-like search across the
+    codebase and returns formatted matches.
+    """
     root_dir = '/testbed'
     results = []
 
+    # Verify regex is valid
     try:
         compiled_regex = re.compile(pattern)
     except re.error as e:
         return f"Error: Invalid regular expression pattern '{pattern}': {e}"
 
+    # Error in case that the root_dir doesn't exist
     base_path = Path(root_dir).resolve()
-
     if not base_path.exists():
         return f"Error: Workspace path '{root_dir}' does not exist."
 
@@ -150,7 +144,8 @@ def search_code(pattern: str, file_pattern: str = "*") -> str:
                     if compiled_regex.search(line):
                         # Format: /absolute/path:<line_number> <line_content>
                         abs_path = file_path.resolve()
-                        results.append(f"{abs_path}:{line_number} {line.rstrip()}")
+                        results.append(f"{abs_path}:{line_number} "
+                                       f"{line.rstrip()}")
         except Exception:
             # Silently skip unreadable files or binary files
             continue
@@ -161,14 +156,64 @@ def search_code(pattern: str, file_pattern: str = "*") -> str:
     return "\n".join(results)
 
 
+@mcp.tool
+def search_function_or_class_definition_in_code(name: str) -> str:
+    """
+    Find the definition of a function or a class.
+    """
+    root_dir = '/testbed'
+
+    # Create a regex pattern to match the function/class definition
+    pattern = re.compile(
+        rf"^\s*(?:async\s+)?(?:def|class)\s+{re.escape(name)}\b"
+    )
+
+    # Error in case that the root_dir doesn't exist
+    base_path = Path(root_dir).resolve()
+    if not base_path.exists():
+        return f"Error: Workspace path '{root_dir}' does not exist."
+
+    # Start searching
+    results = []
+    for file_path in base_path.rglob("*.py"):
+        # Skip non-files
+        if not file_path.is_file():
+            continue
+        # Read file
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line_number, line in enumerate(f, start=1):
+                    # Search for the pattern in this file
+                    if pattern.search(line):
+                        # Pattern found. Adding file to the results
+                        results.append(
+                            f"{file_path.resolve()}:{line_number} "
+                            f"{line.rstrip()}"
+                        )
+        except Exception:
+            # Skip this file in case of an error
+            continue
+
+    # Return formatted result, or clean error message
+    return "\n".join(results) if results else ("No definition "
+                                               f"found for '{name}'.")
+
 
 if __name__ == "__main__":
     # Get transport mode from env variable MCP_TRANSPORT
-    transport_mode = os.environ.get("MCP_TRANSPORT", "null")
+    transport_mode = os.environ.get("MCP_TRANSPORT", "stdio")
 
     # Verify transport mode
-    if transport_mode != 'http' and transport_mode != 'stdio':
-        raise TypeError(f'Wrong transport mode ("{transport_mode}") provided in the env variable "MCP_TRANSPORT".')
+    if transport_mode != "http" and transport_mode != "stdio":
+        raise TypeError(
+            f'Wrong transport mode ("{transport_mode}") '
+            'provided in the env variable "MCP_TRANSPORT".'
+        )
+
+    # Use literal value for mypy
+    mode: Literal["http", "stdio"] = "http"
+    if transport_mode == 'stdio':
+        mode = 'stdio'
 
     # Listen
-    mcp.run(transport=transport_mode)
+    mcp.run(transport=mode)
