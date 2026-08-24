@@ -10,6 +10,7 @@ import json
 import os
 import re
 from pathlib import Path
+import subprocess
 import sys
 from typing import Literal
 
@@ -46,8 +47,10 @@ if TASK is None:
         "SWE_TASK_JSON env variable.",
         file=sys.stderr,
     )
+    exit(1)
 
-TIMEOUT_DELAY_SEC = 10
+# Some evaluation scripts can take some times to run
+TIMEOUT_DELAY_SEC = 600
 
 # Root of the codebase the MCP server is allowed to explore.
 ROOT_DIR = '/testbed'
@@ -309,6 +312,33 @@ def find_references(name: str, filepath: str, line: int) -> str:
     if not results:
         return f"No references found for '{name}'."
     return "\n".join(results)
+
+
+@mcp.tool
+def run_tests() -> str:
+    """
+    Runs some tests to verify that the current state
+    of the codebase is working well.
+    """
+    # Verify task is present (needed for mypy)
+    if TASK is None:
+        raise SWEException('Could not run tests: tests not loaded ! '
+                           'This is a server-side problem.')
+    try:
+        # Start the evaluation process
+        proc = subprocess.run(
+            ['bash', '-c', TASK.eval_script],
+            timeout=TIMEOUT_DELAY_SEC,
+            input="",
+            capture_output=True,
+            text=True,
+        )
+
+        # Return the result
+        return proc.stdout
+
+    except subprocess.TimeoutExpired:
+        return f'Test failed, timeout expired ({TIMEOUT_DELAY_SEC}s)!'
 
 
 if __name__ == "__main__":

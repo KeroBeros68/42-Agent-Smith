@@ -49,6 +49,7 @@ if TASK is None:
         "MBPP_TASK_JSON env variable.",
         file=sys.stderr,
     )
+    exit(1)
 
 TIMEOUT_DELAY_SEC = 10
 

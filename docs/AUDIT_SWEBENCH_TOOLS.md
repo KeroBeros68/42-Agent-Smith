@@ -2,13 +2,13 @@
 
 > Audit de conformité du serveur MCP SWE-bench par rapport au sujet officiel (`subject-1-1.txt`, v1.1, §V.5) et au `CAHIER_DES_CHARGES.md`.
 >
-> **Date de l'audit** : 2026-08-23 (mise à jour)
+> **Date de l'audit** : 2026-08-24 (mise à jour)
 > **Périmètre** : `mcp_tools_swebench.py` (racine du dépôt)
 > **Méthode** : points positifs/négatifs justifiés par référence exacte au texte du sujet, par mypy/flake8, ou par test réel — même méthodologie que `AUDIT_SANDBOX.md`.
 
 ---
 
-## Récapitulatif de conformité §V.5 — 6 outils sur 9
+## Récapitulatif de conformité §V.5 — 7 outils sur 9
 
 | Outil | Section | Description (du sujet) | État |
 |---|---|---|---|
@@ -18,7 +18,7 @@
 | `search_code(pattern, file_pattern)` | §V.5.2 | Perform a grep-like search in the codebase. Output format: `/absolute/path_to_file.py:<line_number> <line_content>` | ✅ Implémenté |
 | `search_function_or_class_definition_in_code(name)` | §V.5.2 | Find the definition of a function or a class. Output format similar to `search_code`. | ✅ Implémenté |
 | `find_references(name, filepath, line)` | §V.5.2 | Find all usages of a symbol (function or class). Output format similar to `search_code`. | ✅ Implémenté |
-| `run_tests()` | §V.5.3 | Execute the evaluation script. | ❌ Manquant |
+| `run_tests()` | §V.5.3 | Execute the evaluation script. | ✅ Implémenté |
 | `get_patch()` | §V.5.3 | Retrieve the unified git diff of all changes made to the repository. | ❌ Manquant |
 | `run_command(command, workdir)` | §V.5.3 | Execute a shell command in the specified working directory. Returns the command's stdout, stderr, and exit code. | ❌ Manquant |
 
@@ -32,6 +32,7 @@
 4. **`search_code` scope son parcours à `/testbed`** (`root_dir = '/testbed'`) et vérifie son existence avant de parcourir — évite de chercher sur tout le système de fichiers du conteneur par défaut.
 5. **`search_function_or_class_definition_in_code` conforme — même format que `search_code`, matcher plus précis.** Implémentée à la racine `/testbed`, ne parcourt que `*.py`, et utilise un regex ancré `^\s*(?:async\s+)?(?:def|class)\s+{re.escape(name)}\b` : `re.escape(name)` neutralise les métacaractères de l'entrée, `\b` empêche les faux positifs de sous-chaîne (`name="parse"` ne matche pas `parse_all`), et l'ancre `def|class` exclut les appels (`x = name(...)`). Format de sortie strictement identique à `search_code` (`/abs/path.py:<n> <content>`) — le *"similar to search_code format"* du §V.5.2 est respecté au mot près.
 6. **`find_references` conforme — matcher sémantique "usage", garde de définition.** Implémentée à la racine `/testbed` sur `*.py`, elle utilise un regex à frontière de mot `\b{name}\b` (avec `re.escape`) : matche `parse(...)`, `mod.parse`, `from x import parse`, mais pas `parse_all` ni `Parser` (faux positifs de sous-chaîne écartés). `filepath`/`line` identifient le site de définition, dont la **ligne est exclue** des résultats (une déclaration n'est pas un usage). Un garde `Path(filepath).exists()` renvoie une erreur claire si le chemin fourni n'existe pas — cohérent avec l'esprit "pas d'échec silencieux" (§V.1.3). Format de sortie strictement identique à `search_code`. Vérifié par test réel sur un dépôt synthétique (`parse` vs `parse_all`/`Parser` + exclusion de la ligne de définition). Limite assumée : approche grep, pas AST — `filepath`/`line` excluent la ligne de définition mais ne désambiguïsent pas sémantiquement deux symboles homonymes.
+7. **`run_tests()` implémentée — exécute réellement l'`eval_script`.** `subprocess.run([TASK.eval_script], shell=True, timeout=TIMEOUT_DELAY_SEC, input="", capture_output=True, text=True)` exécute le script bash multi-lignes fourni par le moulinette. `shell=True` est ici nécessaire : l'`eval_script` est une *chaîne* de script (plusieurs lignes, heredoc, `set -uxo pipefail`), pas un chemin exécutable — sans `shell=True`, `subprocess.run([script])` échouerait en `FileNotFoundError`. `input=""` force `stdin=PIPE` avec EOF immédiat : l'enfant ne bloque jamais sur un stdin hérité (critique sur transport stdio, où le serveur écoute déjà sur son propre stdin). Le timeout est intercepté (`except subprocess.TimeoutExpired`) → pas de crash si l'éval dépasse la durée. `TASK is None` → `SWEException` claire avant tout `subprocess` (et satisfait mypy).
 
 ## ❌ Mauvais
 
@@ -39,6 +40,7 @@
 2. **Aucune limite de taille de sortie.** `search_code` et `list_files` peuvent retourner un nombre illimité de résultats sur un `/testbed` volumineux, sans troncature ni signal — alors que le sujet exige explicitement un feedback pour *"Tool output was truncated due to size limits"* (§V.1.3). Actuellement, rien ne tronque, donc rien ne signale non plus.
 3. **Incohérence de portée entre outils.** `search_code` est scopé à `/testbed`, mais `read_file`/`edit_file`/`list_files` acceptent n'importe quel chemin absolu, sans restriction. Ces outils tournent hors sandbox avec leurs propres permissions (pas une violation du sujet en soi), mais l'absence de cohérence avec `search_code` sur ce point n'a probablement pas été un choix délibéré.
 4. **`list_files` ne recurse pas sans `**` explicite dans le pattern — vérifié empiriquement.** `glob.glob(path, recursive=True)` ne recurse que si le *pattern* contient `**` ; testé directement : `list_files("/dir", "*.py")` ne renvoie que les fichiers du niveau racine, pas des sous-dossiers, malgré `recursive=True`. Pour explorer un vrai dépôt comme `/testbed` (fichiers presque toujours dans des sous-dossiers), un agent qui appelle `list_files(dir, "*.py")` — l'usage le plus naturel — n'obtiendra presque rien.
+6. **`run_tests()` ne propage ni verdict ni `stderr`, et son timeout est probablement trop court.** (a) L'`eval_script` SWE-bench retourne **toujours 0** — sa dernière commande est `git checkout ...` (restauration du fichier de test) — donc le pass/fail n'est PAS dans l'exit code mais dans le stdout entre les marqueurs `Start Test Output`/`End Test Output`. L'outil retourne `proc.stdout` brut sans parser ce verdict : choix assumé (l'agent raisonne sur la sortie), mais à documenter pour ne pas tromper l'appelant sur la sémantique de l'exit code. (b) `stderr` est ignoré : en cas de crash réel de l'éval (échec git, traceback de setup), seul `proc.stdout` est retourné — or c'est dans `stderr` qu'atterrissent ces erreurs. (c) `TIMEOUT_DELAY_SEC = 60` est probablement trop court pour un éval complet (`pip install -e .` + `git` + suite de tests) ; et le message `'Test failed, timeout expired (60s)!'` amalgame un timeout d'infrastructure avec un échec de test.
 5. ~~`mcp.run(transport=transport_mode)` — mypy signale un type non garanti statiquement~~ **→ RÉSOLU.** Le `transport_mode` était un `str` brut, incompatible avec le `Literal['stdio', 'http', ...]` attendu par `FastMCP.run()`. Corrigé depuis l'audit du 2026-08-23 : une variable typée `mode: Literal["http", "stdio"]` est affectée via une condition explicite avant `mcp.run(transport=mode)`. Vérifié : `mypy mcp_tools_swebench.py` → `Success: no issues found`.
 
 **Détails mineurs non bloquants** : typo dans le docstring de `read_file` ("opening pens the given file"). flake8 et mypy sont **propres** (`flake8` → exit 0, `mypy` → *Success: no issues found*) — les 10 signalements flake8 signalés lors de l'audit du 2026-08-23 (lignes trop longues `E501`, espacements `E302`/`E303`) ont été corrigés depuis.
@@ -58,5 +60,6 @@ Importe `from student.agent_swebench.task import SWEBenchTaskInput` — un modul
 1. **Ajouter une limite de taille + message de troncature** sur `search_code`/`list_files` — c'est une exigence explicite du sujet (§V.1.3), pas une amélioration optionnelle
 2. **Remplacer les `except IndexError` morts** par une vraie validation de `start_line`/`end_line` (ex: `start_line >= 1`, `start_line <= end_line`) dans `read_file`/`edit_file`
 3. **Corriger le pattern de `list_files`** — soit forcer `**/` en préfixe du pattern, soit documenter clairement que l'appelant doit le faire lui-même
-4. **Implémenter les 3 outils manquants** : `run_tests`, `get_patch`, `run_command` — sans eux, l'agent SWE-bench ne peut ni exécuter de tests, ni produire de patch final (les deux outils de code search §V.5.2 sont désormais implémentés — voir ✅ Bon #5 et #6).
-5. **Décider et appliquer une politique de portée cohérente** (`/testbed` partout, ou nulle part, mais pas un mélange des deux)
+4. **Implémenter les 2 outils manquants** : `get_patch`, `run_command` — sans eux, l'agent SWE-bench ne peut pas produire de patch final ni exécuter de commande (§V.5.3). (`run_tests` est désormais implémenté — voir ✅ Bon #7 / ❌ Mauvais #6.)
+5. **Ajuster `run_tests`** : augmenter `TIMEOUT_DELAY_SEC` (60s probablement insuffisant pour `pip install -e .` + `git` + suite de tests), retourner `stderr` en cas de crash, et documenter que le verdict pass/fail se lit dans le stdout entre les marqueurs (l'exit code est toujours 0).
+6. **Décider et appliquer une politique de portée cohérente** (`/testbed` partout, ou nulle part, mais pas un mélange des deux)
