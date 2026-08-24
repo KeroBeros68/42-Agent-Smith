@@ -378,6 +378,40 @@ def get_patch() -> str:
                 f'diff ({TIMEOUT_DELAY_SEC}s)!')
 
 
+@mcp.tool
+def run_command(command: str, workdir: str) -> str:
+    """
+    Execute a shell command in the specified working directory.
+    Returns the command's stdout, stderr, and exit code.
+    """
+
+    abs_path = Path(workdir).resolve()
+    if not abs_path.exists():
+        return "Error: The given workdir does not exist !"
+
+    try:
+        # Run the command
+        proc = subprocess.run(
+            ['bash', '-c', command],
+            timeout=TIMEOUT_DELAY_SEC,
+            input="",
+            capture_output=True,
+            text=True,
+            cwd=abs_path
+        )
+
+        return ("=== STDOUT ===\n"
+                f'{proc.stdout}\n'
+                '=== STDERR ===\n'
+                f'{proc.stderr}\n'
+                '=== EXIT CODE ===\n'
+                f'{proc.returncode}')
+
+    except subprocess.TimeoutExpired:
+        return ('Timeout expired while executing '
+                f'your command ({TIMEOUT_DELAY_SEC}s)!')
+
+
 if __name__ == "__main__":
     # Get transport mode from env variable MCP_TRANSPORT
     transport_mode = os.environ.get("MCP_TRANSPORT", "stdio")
