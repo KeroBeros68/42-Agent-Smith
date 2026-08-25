@@ -93,19 +93,19 @@ def read_file(filepath: str, start_line: int, end_line: int) -> str:
         return 'Error: start_line and end_line must be at least 1 !'
     if start_line > end_line:
         return 'Error: end_line cannot be less than start_line !'
-
     try:
         with open(filepath, 'r') as f:
-            lines = f.readlines()
-        if start_line > len(lines):
+            nb_lines = len(f.readlines())
+        if start_line > nb_lines:
             return ('Error: start_line is greater than the total '
-                    f'number of lines of the file ({len(lines)}) !')
-        if end_line > len(lines):
+                    f'number of lines of the file ({nb_lines}) !')
+        if end_line > nb_lines:
             return ('Error: end_line is greater than the total '
-                    f'number of lines of the file ({len(lines)}) !')
+                    f'number of lines of the file ({nb_lines}) !')
     except Exception:
         pass
 
+    # Read the file
     try:
         with open(filepath, 'r') as f:
             # Read concerned lines
@@ -384,10 +384,11 @@ def run_tests() -> str:
         )
 
         # Return the result
-        return truncate_output(proc.stdout)
+        return truncate_output(f'=== stdout ===\n{proc.stdout}'
+                               f'=== stderr ===\n{proc.stderr}')
 
     except subprocess.TimeoutExpired:
-        return f'Test failed, timeout expired ({TIMEOUT_DELAY_SEC}s)!'
+        return f'Evaluation timed out ({TIMEOUT_DELAY_SEC}s)!'
 
 
 @mcp.tool
@@ -395,13 +396,14 @@ def get_patch() -> str:
     """
     Retrieve the unified git diff of all changes made to the repository.
 
-    Runs the command 'git diff'. Created files must therefore be added before
-    with 'git add' to be part of the git diff.
+    Runs the command 'git diff HEAD' and outputs the result.
+    New files must be added with 'git add' (or 'git add -N') to be
+    included in the output.
     """
     try:
         # Run the git diff
         proc = subprocess.run(
-            ['git', 'diff'],
+            ['git', 'diff', 'HEAD'],
             timeout=TIMEOUT_DELAY_SEC,
             input="",
             capture_output=True,
