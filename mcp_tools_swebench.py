@@ -82,11 +82,18 @@ def read_file(filepath: str, start_line: int, end_line: int) -> str:
         '<line_number>: <line_content>' (like `cat -n`).
         An error message if the file cannot be read or the lines don't exist.
     """
+    # Prevent interracting with out of boundaries files
+    path = Path(filepath).resolve()
+    if not path.is_relative_to(ROOT_DIR):
+        return ('Error: you are trying to interract with a file outside your '
+                f'allowed directory ({ROOT_DIR})')
+
     # Prevent invalid lines
     if start_line <= 0 or end_line <= 0:
         return 'Error: start_line and end_line must be at least 1 !'
     if start_line > end_line:
         return 'Error: end_line cannot be less than start_line !'
+
     try:
         with open(filepath, 'r') as f:
             lines = f.readlines()
@@ -134,6 +141,12 @@ def edit_file(filepath: str, old_str: str, new_str: str) -> str:
         A confirmation message on success, or an error message if the file
         cannot be read/written or old_str is not found in it.
     """
+    # Prevent interracting with out of boundaries files
+    path = Path(filepath).resolve()
+    if not path.is_relative_to(ROOT_DIR):
+        return ('Error: you are trying to interract with a file outside your '
+                f'allowed directory ({ROOT_DIR})')
+
     try:
         # Open file
         with open(filepath, 'r') as f:
@@ -168,6 +181,12 @@ def list_files(directory: str, pattern: str) -> str:
     Returns:
         The matching file paths, one per line, or a message if none match.
     """
+    # Prevent interracting with out of boundaries files
+    path = Path(directory).resolve()
+    if not path.is_relative_to(ROOT_DIR):
+        return ('Error: you are trying to interract with a file outside your '
+                f'allowed directory ({ROOT_DIR})')
+
     search_path = os.path.join(directory, pattern)
     matches = sorted(glob.glob(search_path, recursive=True))
     if not matches:
@@ -292,6 +311,12 @@ def find_references(name: str, filepath: str, line: int) -> str:
     declaration, not a usage.
     Output format is similar to search_code.
     """
+    # Prevent interracting with out of boundaries files
+    path = Path(filepath).resolve()
+    if not path.is_relative_to(ROOT_DIR):
+        return ('Error: you are trying to interract with a file outside your '
+                f'allowed directory ({ROOT_DIR})')
+
     # Create regex to match an object name
     # the \b correspond to a non-word char, e.g : "(", ".", etc.
     pattern = re.compile(rf"\b{re.escape(name)}\b")
@@ -407,6 +432,11 @@ def run_command(command: str, workdir: str) -> str:
     Execute a shell command in the specified working directory.
     Returns the command's stdout, stderr, and exit code.
     """
+    # Prevent interracting with out of boundaries files
+    path = Path(workdir).resolve()
+    if not path.is_relative_to(ROOT_DIR):
+        return ('Error: you are trying to interract with a file outside your '
+                f'allowed directory ({ROOT_DIR})')
 
     abs_path = Path(workdir).resolve()
     if not abs_path.exists():
