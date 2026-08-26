@@ -18,18 +18,21 @@ def run(
     model_name: str,
     system_prompt: str,
     max_iterations: int,
-) -> list[StepMetrics]:
-    """Run the agent loop and return the per-step metrics.
+) -> tuple[list[StepMetrics], str | None]:
+    """Run the agent loop and return the per-step metrics and final answer.
 
     Stops early on final_answer, or if the LLM call itself fails
     (LLMError) — in both cases the steps already collected are kept and
-    returned rather than lost. The caller can't yet distinguish a clean
-    stop from a failure from the return value alone; that's deferred to
-    whoever assembles SolutionOutput. No cumulative token/time limit yet.
+    returned rather than lost. The second element is the code passed to
+    final_answer() if the loop stopped that way, else None (max_iterations
+    reached or LLMError) — this is what lets the caller set
+    SolutionOutput.success/.solution without guessing from the steps. No
+    cumulative token/time limit yet.
     """
     llm = LLM(model_name)
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     steps: list[StepMetrics] = []
+    final_answer: str | None = None
 
     for step in range(1, max_iterations + 1):
         try:
@@ -52,9 +55,10 @@ def run(
         messages.append({"role": "user", "content": observation})
 
         if response.get("type") == "final_answer":
+            final_answer = response.get("answer", "")
             break
 
-    return steps
+    return steps, final_answer
 
 
 def _format_observation(response: dict) -> str:

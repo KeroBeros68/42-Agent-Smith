@@ -86,13 +86,19 @@ class MCPBridge:
         # surfaces with its original message instead of a misleading
         # "disconnected" report.
         try:
-            return self._run(self._client.call_tool(name, arguments))
+            result = self._run(self._client.call_tool(name, arguments))
         except Exception:
             if not self.is_connected():
                 raise ConnectionError(
                     f"MCP server disconnected while calling tool {name!r}"
                 ) from None
             raise
+        # .data holds the parsed result (e.g. the tool's return string);
+        # the full CallToolResult repr is noise once relay_tool_calls
+        # str()s it for the sandboxed code — found via a real agent run
+        # where the LLM saw "CallToolResult(content=[...], ...)" instead
+        # of "All test passed successfully !".
+        return result.data if result.data is not None else result
 
     def __enter__(self) -> "MCPBridge":
         self.connect()

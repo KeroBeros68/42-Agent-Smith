@@ -35,7 +35,9 @@ class LLM(AbstractLLM):
     Class used for LLM Inference
     """
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(
+        self, model_name: str, provider_url: str | None = None
+    ) -> None:
         """
         Initializes the LLM.
         """
@@ -47,6 +49,7 @@ class LLM(AbstractLLM):
             )
         self.__model_name = model_name
         self.__provider = model_name.split("/")[0]
+        self.__provider_url = provider_url
         self.__api_keys = self._get_keys_for_provider(self.__provider)
 
         # Raise exception if no keys were found
@@ -63,13 +66,16 @@ class LLM(AbstractLLM):
         # Create a model_list for the router to be based on
         model_list = []
         for api_key in self.__api_keys:
+            litellm_params = {
+                "model": self.__model_name,
+                "api_key": api_key,
+            }
+            if self.__provider_url is not None:
+                litellm_params["api_base"] = self.__provider_url
             model_list.append(
                 {
                     "model_name": self.__model_name.split("/")[1],
-                    "litellm_params": {
-                        "model": self.__model_name,
-                        "api_key": api_key,
-                    },
+                    "litellm_params": litellm_params,
                 }
             )
 
@@ -151,7 +157,7 @@ class LLM(AbstractLLM):
             step=step,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            request_time_ms=(end_time - start_time) / 1000,
+            request_time_ms=(end_time - start_time) / 1_000_000,
             api_url=llm_gen._hidden_params.get("api_base") or "",
             model_name=self.__model_name,
             llm_output=llm_gen.choices[0].message.content or "",
