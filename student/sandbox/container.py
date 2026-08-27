@@ -45,7 +45,21 @@ RECEIVE_TIMEOUT_MARGIN_SECONDS = 30
 # user). Paths are hardcoded on purpose: deriving them from
 # allowed_directories would tmpfs-mount /testbed for SWE-bench and mask the
 # task repository behind an empty mount.
-TMPFS_OPTIONS = "rw,noexec,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700"
+#
+# `exec`, not just the absence of `noexec`: Docker mounts tmpfs `noexec`
+# by default and only drops it when `exec` is explicitly listed — merely
+# omitting `noexec` from the options string still produced a `noexec`
+# mount in testing (`mount` inside the container showed it regardless).
+# Needed because SWE-bench's own eval_script invokes test runners
+# directly (e.g. `./tests/runtests.py`, relying on the file's own exec
+# bit) inside /workspace — confirmed by testing (`Permission denied`
+# without this). Doesn't weaken the restricted-Python-execution boundary
+# (runner.py): that code path already blocks subprocess/os.system/
+# dangerous imports at the Python level (restrictions.py), so `noexec`
+# was defense-in-depth on top of that, not the only barrier — and it
+# never applied to MCP tools' own `docker exec` calls (a separate
+# security domain, §V.2.5) anyway.
+TMPFS_OPTIONS = "rw,exec,nosuid,nodev,size=4096m,uid=1000,gid=1000,mode=0700"
 TMPFS_MOUNTS = {
     "/workspace": TMPFS_OPTIONS,
     "/tmp": TMPFS_OPTIONS,
