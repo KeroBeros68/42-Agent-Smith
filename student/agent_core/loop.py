@@ -42,7 +42,7 @@ def run(
         messages.append({"role": "assistant", "content": metrics.llm_output})
         steps.append(metrics)
 
-        code = extract_code(metrics.llm_output)
+        code, warning = extract_code(metrics.llm_output)
         if code is None:
             observation = "No valid code block was found in your response."
             messages.append({"role": "user", "content": observation})
@@ -51,6 +51,8 @@ def run(
         metrics.sandbox_input = code
         response = run_code(container, mcp_bridge, code)
         observation = _format_observation(response)
+        if warning is not None:
+            observation = f"{warning}\n\n{observation}"
         metrics.sandbox_output = observation
         messages.append({"role": "user", "content": observation})
 

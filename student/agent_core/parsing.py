@@ -7,6 +7,13 @@ import json
 import re
 
 _CODE_BLOCK_RE = re.compile(r"```python\s*\n(.*?)```", re.DOTALL)
+_UNCLOSED_CODE_BLOCK_RE = re.compile(r"```python\s*\n(.*)", re.DOTALL)
+
+_UNCLOSED_FENCE_WARNING = (
+    "Note: your ```python code block was not closed with a closing ``` "
+    "fence. Everything after the opening ```python marker was "
+    "interpreted as code — always close your code blocks."
+)
 
 _TOOL_CALL_RE = re.compile(
     r'<[^>]*\binvoke\b[^>]*\bname="([^"]+)"[^>]*>(.*?)</[^>]*\binvoke\b[^>]*>',
@@ -25,29 +32,57 @@ _REACT_ACTION_RE = re.compile(
 )
 
 
-def extract_code(llm_output: str) -> str | None:
-    """Return the Python code found in llm_output, or None if none was found.
+def extract_code(llm_output: str) -> tuple[str | None, str | None]:
+    """Return (code, warning) extracted from llm_output.
+
+    `code` is None if no format matched at all — the explicit "no valid
+    code block was found" signal (§V.1); the caller (loop.py) decides
+    what feedback to give the LLM, this function only reports absence
+    honestly instead of guessing.
+
+    `warning` is set when a block was malformed but interpreted anyway
+    (§V.1's second mandatory feedback case: "explain how") — e.g. a
+    ```python fence opened but never closed — None otherwise.
 
     Tries the primary format (a) first (fenced ```python block), then
-    falls back in order to formats (b) XML tool calls, (c) JSON/Hermes
-    tool calls, (d) ReAct — some models default to their own trained
-    tool-calling syntax instead of the fenced-block pattern demonstrated
-    in the system prompt's worked example (found empirically for format
-    (b) with DeepSeek). None is the explicit "no valid code block" signal
-    (§V.1) if no format matches — the caller (loop.py) decides what
-    feedback to give the LLM, this function only reports absence
-    honestly instead of guessing.
+    its malformed/unclosed variant, then falls back in order to formats
+    (b) XML tool calls, (c) JSON/Hermes tool calls, (d) ReAct — some
+    models default to their own trained tool-calling syntax instead of
+    the fenced-block pattern demonstrated in the system prompt's worked
+    example (found empirically for format (b) with DeepSeek).
     """
     match = _CODE_BLOCK_RE.search(llm_output)
     if match is not None:
-        return match.group(1).strip()
+        return match.group(1).strip(), None
+
+    code = _extract_unclosed_code_block(llm_output)
+    if code is not None:
+        return code, _UNCLOSED_FENCE_WARNING
+
     code = _extract_xml_tool_calls(llm_output)
     if code is not None:
-        return code
+        return code, None
     code = _extract_json_tool_calls(llm_output)
     if code is not None:
-        return code
-    return _extract_react_tool_calls(llm_output)
+        return code, None
+    code = _extract_react_tool_calls(llm_output)
+    if code is not None:
+        return code, None
+    return None, None
+
+
+def _extract_unclosed_code_block(llm_output: str) -> str | None:
+    """Best-effort recovery for a ```python fence missing its closing ```.
+
+    Interprets everything after the opening marker as code — only
+    reached when _CODE_BLOCK_RE already failed to match, which means no
+    closing ``` exists anywhere after "```python\\n" in the string.
+    """
+    match = _UNCLOSED_CODE_BLOCK_RE.search(llm_output)
+    if match is None:
+        return None
+    body = match.group(1).strip()
+    return body if body else None
 
 
 def _python_literal(value: str) -> str:
