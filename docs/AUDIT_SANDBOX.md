@@ -13,7 +13,7 @@
 
 Le sandbox est maintenant fonctionnel de bout en bout, sécurité comprise : `exec`/`result`/`error`/`final_answer`, restrictions d'imports, builtins restreints, timeout par exécution, **et** le relais `tool_call` conteneur ↔ `MCPBridge` ↔ vrai serveur MCP. Tout a été vérifié en conditions Docker réelles, pas seulement en théorie — y compris 3 bugs non triviaux trouvés uniquement grâce à ces tests (mapping des arguments positionnels d'un tool, timeout local qui comptait à tort le temps d'attente réseau, et un `redirect_stdout` qui avalait silencieusement le message protocole du stub — voir « Corrigés » en fin de document pour le détail de chacun).
 
-Ce qui reste : le transport MCP HTTP (seul stdio a été testé en réel), l'affichage brut du REPL, et quelques points mineurs listés par fichier ci-dessous.
+**Mise à jour du 2026-08-26** : le transport MCP HTTP est désormais testé en réel lui aussi (`MCPBridge` et la CLI `--mcp-server`, voir la section `mcp_bridge.py` plus bas) — les deux transports sont couverts. Ce qui reste : quelques points mineurs listés par fichier ci-dessous.
 
 ---
 
@@ -129,9 +129,11 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 
 **Depuis le 2026-08-26** : `call_tool()` retourne maintenant `result.data` plutôt que l'objet `CallToolResult` complet (repli sur l'objet brut si `.data is None`). Bug trouvé en conditions réelles, pas en relisant le code : lors du 3e test d'intégration `agent_core` (vrai LLM + vrai conteneur), `relay_tool_calls` faisait `str(result)` sur l'objet complet avant de l'envoyer au conteneur — le LLM recevait `"CallToolResult(content=[...], structured_content={...}, data='All test passed successfully !', ...)"` comme observation au lieu du texte propre. Le LLM s'en est sorti quand même cette fois, mais c'était du bruit et un risque de confusion pour un modèle moins capable. Revérifié après fix : `sandbox_output` de l'appel `run_tests` est maintenant exactement `"All test passed successfully !"`.
 
+**Transport HTTP testé réellement le 2026-08-26** — jusqu'ici seul `stdio` avait été vérifié en conditions réelles (❌ Mauvais #1, ci-dessous, maintenant clos). `mcp_tools_mbpp.py` lancé en vrai serveur HTTP (`MCP_TRANSPORT=http`, écoute réelle sur `http://127.0.0.1:8000/mcp`, confirmé par le log de démarrage FastMCP) : `MCPBridge(server_url=...).connect()` + `list_tools()` + `call_tool("run_tests", ...)` fonctionnent de bout en bout (résultat propre grâce au fix `.data` ci-dessus). Testé aussi via la vraie CLI, pas seulement `MCPBridge` isolé : `uv run sandbox --mcp-server http://127.0.0.1:8000/mcp` avec du code réel (`run_tests(...)`) envoyé au conteneur Docker — relais `tool_call`→HTTP→conteneur→LLM fonctionnel, `"All test passed successfully !"` retourné correctement. Les 4 formes de la CLI (§V.2.1) sont donc maintenant **toutes** vérifiées en conditions réelles, pas seulement `--mcp-stdio`.
+
 ### ❌ Mauvais
 
-1. **Transport HTTP (`server_url`) jamais testé en conditions réelles** — seul `stdio` a été vérifié contre un vrai serveur. `fastmcp.Client` est censé inférer le transport depuis l'URL, mais ce chemin de code n'a jamais tourné.
+Aucun point ouvert — le seul point restant (transport HTTP jamais testé en conditions réelles) est clos depuis le 2026-08-26, voir ci-dessus.
 
 ---
 
@@ -188,7 +190,7 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 
 | Exigence | État |
 |---|---|
-| CLI `uv run sandbox` (4 formes) | ✅ Les 4 formes fonctionnent, testé de bout en bout (`--mcp-stdio` contre le vrai `mcp_tools_mbpp.py`) |
+| CLI `uv run sandbox` (4 formes) | ✅ Les 4 formes fonctionnent, testé de bout en bout — `--mcp-stdio` **et** `--mcp-server` contre le vrai `mcp_tools_mbpp.py` (mise à jour 2026-08-26) |
 | REPL interactif | ✅ Boucle, sorties, multi-ligne, Ctrl+C, relais `tool_call` et affichage distinct résultat/erreur/`final_answer` |
 | `final_answer` injecté | ✅ Testé imbriqué dans une fonction/boucle, propagation par exception vérifiée à plusieurs niveaux d'appel |
 | `KeyboardInterrupt`/`SystemExit` propagées | ✅ Structurellement garanti par `__exit__` |
@@ -198,8 +200,8 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 | Timeout d'exécution | ✅ `signal.alarm()`, testé en conditions réelles contre une vraie boucle infinie |
 | Limite mémoire | ✅ `mem_limit` |
 | Builtins restreints | ✅ Allowlist testée en conditions réelles ; limite connue documentée (introspection `__subclasses__`, non fermable en stdlib pur) |
-| Intégration MCP (stdio + HTTP) | 🟡 Relais `tool_call` complet et vérifié en conditions Docker réelles (stdio) ; transport HTTP jamais testé en réel |
-| Manuel dynamique | ❌ Stub |
+| Intégration MCP (stdio + HTTP) | ✅ Relais `tool_call` complet, vérifié en conditions Docker réelles pour **les deux transports** (mise à jour 2026-08-26) |
+| Manuel dynamique | ✅ `agent_core/manual.py` (`build_manual`), généré depuis `tool.inputSchema` réel, testé contre `mcp_tools_mbpp.py` et utilisé dans un run `agent_mbpp` complet (mise à jour 2026-08-26, voir `AUDIT_AGENT_CORE.md`) |
 | Config Pydantic + JSON | ✅ Fait, défauts à réaligner |
 
 ---
@@ -208,10 +210,7 @@ Aucun point ouvert pour l'instant — voir « Corrigés depuis l'audit initial �
 
 Par ordre d'impact sur la note :
 
-Les 6 contraintes de sécurité §V.2.3 et le relais `tool_call`/`final_answer` sont maintenant couverts et vérifiés en conditions réelles Docker. Il reste, par ordre d'impact :
-
-1. **Tester le transport HTTP de `MCPBridge`** contre un vrai serveur MCP en HTTP streamable — seul `stdio` a été vérifié en conditions réelles jusqu'ici
-2. **Le manuel dynamique** (`agent_core/manual.py`, hors périmètre de cet audit) reste un stub — nécessaire pour documenter les tools au LLM (§V.2.6)
+Les 6 contraintes de sécurité §V.2.3, le relais `tool_call`/`final_answer`, et les deux transports MCP (stdio + HTTP) sont maintenant couverts et vérifiés en conditions réelles Docker. **Aucune priorité ouverte propre à `student/sandbox/` au 2026-08-26** — le module est fonctionnellement complet et testé de bout en bout sur toute sa surface documentée ici. Les priorités restantes du projet sont ailleurs : voir `AUDIT_AGENT_CORE.md` (limites cumulées, formats de parsing b/c/d) et `AUDIT_SWEBENCH_TOOLS.md` (accès `/testbed` — bloquant pour SWE-bench, sans rapport avec `sandbox/` lui-même).
 
 ---
 
@@ -260,3 +259,4 @@ Les 6 contraintes de sécurité §V.2.3 et le relais `tool_call`/`final_answer` 
 | `_relay_tool_calls` dupliquée à l'identique entre le REPL et le futur `agent_core/sandbox_client.py` (qui vient d'être écrit) — deux copies de la même boucle de relais `tool_call` à maintenir en synchro | `sandbox/session.py` (fonction déplacée depuis `repl.py`, rendue publique : `relay_tool_calls`), `repl.py` (import + appel mis à jour) | Comportement inchangé, simple déplacement + renommage. `agent_core/sandbox_client.py` (nouveau) importe la même fonction plutôt que d'en écrire une copie. Vérifié : `mypy sandbox agent_core` (0 erreur, executor vérifié séparément) et `flake8` sur les 3 fichiers touchés (0 warning) | 2026-08-20 |
 | `MCP_TRANSPORT` (exigé par `mcp_tools_mbpp.py`/`mcp_tools_swebench.py`) n'atteignait jamais le sous-processus stdio — `StdioTransport` sans `env=` explicite ne fait hériter que 6 variables (`HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`), confirmé en lisant le SDK MCP. Bloquait *toute* connexion stdio réelle vers ces deux serveurs (`TypeError` au démarrage du sous-processus) | `mcp_bridge.py` | `env={**os.environ, "MCP_TRANSPORT": "stdio"}` passé explicitement à `StdioTransport`. Vérifié en conditions réelles : `MCPBridge(stdio_command="python3 mcp_tools_mbpp.py").connect()` échouait avant, réussit après (`list_tools()` → `['run_tests']`) | 2026-08-20 |
 | `call_tool()` retournait l'objet `CallToolResult` complet — une fois `str()`-ifié par `relay_tool_calls` pour l'envoyer au conteneur, le LLM recevait le repr Python entier (`"CallToolResult(content=[...], data='...', ...)"`) comme observation au lieu du texte du tool | `mcp_bridge.py` | `return result.data if result.data is not None else result` — extrait le résultat parsé, repli sur l'objet brut si `.data` est `None` (tool sans donnée structurée). Trouvé via un vrai run `agent_core` (LLM + Docker), pas en relisant le code : l'observation de `run_tests` contenait le repr brut avant le fix. Revérifié après : `sandbox_output` devient exactement `"All test passed successfully !"` | 2026-08-26 |
+| Transport HTTP de `MCPBridge` (`server_url`) jamais testé en conditions réelles — seul `stdio` l'avait été | *(aucun changement de code)* | Testé réellement : `mcp_tools_mbpp.py` lancé en vrai serveur HTTP (`MCP_TRANSPORT=http`, `http://127.0.0.1:8000/mcp`), `MCPBridge(server_url=...)` (`connect`/`list_tools`/`call_tool`) et la CLI complète (`uv run sandbox --mcp-server http://127.0.0.1:8000/mcp` avec du vrai code exécuté dans un vrai conteneur Docker) fonctionnent de bout en bout. Les 4 formes de la CLI (§V.2.1) sont désormais toutes vérifiées en conditions réelles | 2026-08-26 |

@@ -66,7 +66,7 @@ Le contrat d'évaluation est en place : les trois modèles (`MBPPTaskInput`, `St
 
 ### ❌ Risques / problèmes
 
-1. **`function_definition` n'est utilisé nulle part.** C'est pourtant la donnée la plus utile : le nom exact et la signature que la solution doit respecter (`def sub_list(nums1,nums2):`). Deux usages immédiats restent de côté — l'ancrer dans le system prompt pour que le modèle ne renomme pas la fonction, et vérifier dans `run_tests` que le code soumis définit bien ce nom, ce qui donnerait un message plus ciblé (« you didn't define `sub_list` ») que le `NameError` brut désormais renvoyé par la traceback.
+1. **`run_tests` ne vérifie pas que le code soumis définit bien `function_definition`.** Un message ciblé (« you didn't define `sub_list` ») serait plus utile que le `NameError` brut actuellement renvoyé par la traceback. (`function_definition` est désormais ancré dans le system prompt par `agent_mbpp/__main__.py` — voir « Corrigés » — donc ce point ne porte plus que sur `run_tests`.)
 
 2. **Aucune contrainte au-delà du typage.** `task_id` peut être négatif, `test_list` peut être vide. Ce second cas n'est plus un faux succès à l'exécution (le serveur le garde, cf. ✅2), mais il serait plus propre de le détecter **au chargement** : `Field(min_length=1)` sur `test_list` déplacerait la détection là où elle est diagnosticable.
 
@@ -130,9 +130,7 @@ Hors périmètre strict de la partie MBPP, mais partage le même socle : hérite
 
 3. **`benchmark: str` libre plutôt que `Literal["mbpp", "swebench"]`.** Une faute de frappe (`"MBPP"`, `"mbpp "`) n'est détectée par rien côté étudiant. Côté moulinette, `_get_limits()` fait `sys.exit(1)` sur un benchmark inconnu : la tâche est perdue à la toute dernière étape, après avoir consommé le budget complet. Un `Literal` déplace l'échec à la construction de l'objet, c'est-à-dire avant. La présence de `SWEBenchTaskInput` rend le couple encore plus pressant : le champ `benchmark` n'existera plus pour rien.
 
-4. **`success` n'est rattaché à aucune source de vérité.** Le champ est documenté « whether the agent believes it solved the task ». Combiné au fait que `success` est auto-déclaré par l'agent et au test caché rejoué à la validation (`skip_first_k_tests=0`), c'est le mode de défaillance le plus probable de toute la partie MBPP : l'agent se déclare gagnant et la moulinette dit non. Il faut décider et écrire la règle — `success=True` seulement si le dernier `run_tests` a répondu succès **et** que `final_answer` a été appelé avec ce code exact — plutôt que de laisser la boucle en décider au cas par cas.
-
-5. **Aucun utilitaire d'écriture.** Le §V.3.1 impose un `--output ../cache/mbpp_solution.json` dont le répertoire parent n'existe pas forcément — la moulinette, elle, fait `output_path.parent.mkdir(parents=True, exist_ok=True)` avant d'écrire. Il manque le pendant côté étudiant (création du parent, `indent=2`, écriture atomique via fichier temporaire + `rename`). Un `solution.json` à moitié écrit parce que le processus a été interrompu, c'est une tâche perdue pour une raison sans rapport avec la qualité de l'agent.
+4. **`success` n'est rattaché à aucune source de vérité.** Le champ est documenté « whether the agent believes it solved the task ». Combiné au fait que `success` est auto-déclaré par l'agent et au test caché rejoué à la validation (`skip_first_k_tests=0`), c'est le mode de défaillance le plus probable de toute la partie MBPP : l'agent se déclare gagnant et la moulinette dit non. Il faut décider et écrire la règle — `success=True` seulement si le dernier `run_tests` a répondu succès **et** que `final_answer` a été appelé avec ce code exact — plutôt que de laisser la boucle en décider au cas par cas. (`agent_mbpp/__main__.py` a depuis implémenté une règle plus simple, `final_answer is not None` — voir « Corrigés » — mais celle-ci ne ferme pas ce point : elle ne vérifie pas le dernier `run_tests`.)
 
 ---
 
@@ -140,11 +138,11 @@ Hors périmètre strict de la partie MBPP, mais partage le même socle : hérite
 
 > **Mise à jour du 2026-08-26** : ce qui suit décrivait `loop.py` comme un docstring sans corps — ce n'est plus le cas depuis les sessions du 2026-08-20/21, hors du périmètre initial de cet audit MBPP. Voir `AUDIT_AGENT_CORE.md` pour le détail complet ; résumé ici pour cohérence.
 
-`agent_core/loop.py` existe et referme réellement la boucle « Thought → Code → Observation » : `run(container, mcp_bridge, model_name, system_prompt, max_iterations)` appelle `provider.LLM.get_response()`, `parsing.extract_code()`, `sandbox_client.run_code()` à chaque itération, réinjecte l'observation comme message `role: "user"`, et s'arrête sur `final_answer`. Testé de bout en bout le 2026-08-21 avec un vrai LLM (DeepSeek) et un vrai conteneur Docker + `mcp_tools_mbpp.py` connecté en stdio — aucun crash, cleanup propre. Conséquences pour la partie MBPP :
+`agent_core/loop.py` existe et referme réellement la boucle « Thought → Code → Observation » : `run(container, mcp_bridge, model_name, system_prompt, max_iterations)` appelle `provider.LLM.get_response()`, `parsing.extract_code()`, `sandbox_client.run_code()` à chaque itération, réinjecte l'observation comme message `role: "user"`, et s'arrête sur `final_answer`. Testé de bout en bout le 2026-08-21 avec un vrai LLM (DeepSeek) et un vrai conteneur Docker + `mcp_tools_mbpp.py` connecté en stdio — aucun crash, cleanup propre. Point encore ouvert pour la partie MBPP :
 
-- ~~Les 3 commandes CLI du §V.3.1 ne s'exécutent toujours pas~~ **→ RÉSOLU le 2026-08-26**, voir section dédiée ci-dessous.
-- **`max_iterations` (§V.3.4) est configurable** — `loop.run()` le prend en paramètre, désormais exposé en CLI (`--max-iterations`, défaut 10, cohérent avec la limite MBPP du §VI.1.1). **Le respect des limites cumulées de tokens/temps (§VI.1.1) reste absent**, ni implémenté ni modélisé par un type (cf. ❌1 de `StepMetrics`, toujours valide) — `--max-iterations` borne le nombre d'itérations, pas le budget tokens/temps consommé.
-- `student/__init__.py`, mentionné ici dans une version antérieure de cet audit comme « paquet régulier, cohérent », était en réalité un ajout accidentel (voir `AUDIT_AGENT_CORE.md`, section Corrigés : `git show f411bfa` montre un faux renommage détecté par git parce que `BENCHMARK_REPORT.md` et `student/__init__.py` faisaient tous les deux 0 octet) qui cassait `uv run mypy sandbox agent_core` pour tout le module. Supprimé le 2026-08-26.
+- **Le respect des limites cumulées de tokens/temps (§VI.1.1) reste absent** — ni implémenté ni modélisé par un type (cf. ❌1 de `StepMetrics`, toujours valide). `--max-iterations` (§V.3.4, exposé en CLI) borne le nombre d'itérations, pas le budget tokens/temps consommé.
+
+(Les 3 commandes CLI du §V.3.1 et le faux départ `student/__init__.py` sont résolus — voir « Corrigés » ci-dessous et `AUDIT_AGENT_CORE.md`.)
 
 ---
 
@@ -165,6 +163,20 @@ Hors périmètre strict de la partie MBPP, mais partage le même socle : hérite
 1. **`success = final_answer is not None`** — ne vérifie pas que le **dernier** `run_tests` avant `final_answer` a effectivement réussi ; un agent pourrait soumettre après un échec de test (ou sans jamais tester, malgré l'instruction). C'est exactement le risque déjà identifié dans la section `SolutionOutput` ❌4 plus haut — toujours ouvert, non fermé par ce fichier.
 2. **`--provider-url` non testé en conditions réelles** — le paramètre existe (`provider/base.py`) et est câblé, mais le test réel a utilisé DeepSeek sans le fournir (URL par défaut de LiteLLM). Le chemin `api_base` personnalisé reste vérifié seulement par mypy/flake8.
 3. **Chemin d'échec testé, avec une nuance trouvée en le testant.** D'abord un bug réel : le `except (DockerException, LLMError, ConnectionError)` initial ne couvrait pas `mcp.shared.exceptions.McpError` (l'exception réellement levée par `mcp_bridge.connect()` sur une tâche mal chargée, vue plus tôt dans l'audit `AUDIT_MBPP.md`/`AUDIT_SANDBOX.md`) — un tel échec serait remonté en crash brut plutôt qu'un `solution.json` documenté. Élargi en `except Exception`, cohérent avec le rôle de frontière extérieure du programme (même pattern que `cli.py`, `KeyboardInterrupt`/`SystemExit` non capturées). **Testé réellement avec un `--model-name` invalide** : exit code 1, pas de traceback, `solution.json` valide produit (`success: false`, `steps: []`). **Mais `error` reste `null`** — `loop.py` capture déjà `LLMError` en interne (`try/except LLMError: break`, voir `AUDIT_AGENT_CORE.md`) pour préserver les `steps` déjà accumulés ; un échec dès la première itération ne laisse donc rien remonter jusqu'au `except Exception` de `__main__.py`. Comportement honnête (pas de crash, pas de valeur inventée) mais peu diagnostiquable — `loop.run()` pourrait à terme retourner aussi la raison de l'arrêt.
+
+---
+
+## Corrigés
+
+Points résolus depuis leur signalement initial dans ce document — retirés des sections ❌/Priorités, listés ici pour la trace.
+
+| Point | Fichier | Correctif appliqué | Date |
+|---|---|---|---|
+| `SolutionOutput` — aucun utilitaire d'écriture ; `--output` peut pointer vers un répertoire parent inexistant, et un `solution.json` interrompu en cours d'écriture serait corrompu | `agent_mbpp/__main__.py` (`write_output()`) | `output_path.parent.mkdir(parents=True, exist_ok=True)`, écriture dans un fichier `.tmp` puis `os.replace()` (atomique), `model_dump_json(indent=2)` | 2026-08-26 |
+| `MBPPTaskInput.function_definition` n'était utilisé nulle part — le modèle ne voyait jamais la signature attendue | `agent_mbpp/__main__.py` (`build_system_prompt()`) | Ancré dans le system prompt (`Function signature: {task.function_definition}`) | 2026-08-26 |
+| `agent_core/loop.py` docstring sans corps, aucun point d'entrée CLI — les 3 commandes du §V.3.1 n'existaient pas | `agent_core/loop.py`, `agent_mbpp/__main__.py` (nouveau) | Boucle Thought→Code→Observation fermée et testée de bout en bout avec un vrai LLM+Docker ; `__main__.py` teste avec la commande exacte du sujet, `solution.json` valide produit (`success: true`). Détail complet dans `AUDIT_AGENT_CORE.md` (« Corrigés ») | 2026-08-21 / 2026-08-26 |
+| `max_iterations` (§V.3.4) non exposé en CLI | `agent_mbpp/__main__.py` | `--max-iterations` (défaut 10, §VI.1.1) | 2026-08-26 |
+| `student/__init__.py` (fichier vide, ajout accidentel — voir `AUDIT_AGENT_CORE.md`) rendait `student` importable comme un vrai package et cassait `uv run mypy sandbox agent_core` | `student/__init__.py` (supprimé) | Détail complet dans `AUDIT_AGENT_CORE.md` (« Corrigés ») | 2026-08-26 |
 
 ---
 

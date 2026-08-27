@@ -60,7 +60,7 @@ Aucun point ouvert — les 3 points identifiés initialement (absence de `try/ex
 1. **Pas de limites cumulées** (tokens totaux, temps total) — seul `max_iterations` est un paramètre ; rien n'empêche une boucle de consommer un budget de tokens disproportionné avant d'atteindre `max_iterations`.
 2. **`_format_observation` dupliquée en substance avec `repl._format_response`** — même logique (distinguer `result`/`error`/`final_answer`), deux implémentations légèrement différentes (préfixes/`\n` différents pour l'affichage humain vs le texte envoyé au LLM). Différence délibérée pour l'instant (les deux publics sont différents), mais à surveiller si elles divergent involontairement plus tard.
 3. **`code is None` renvoie toujours le même message d'observation** (« No valid code block was found in your response. ») — pas de distinction avec le deuxième cas de feedback du sujet (§V.1 : « A code block was malformed but was interpreted anyway ») ; `parsing.extract_code()` lui-même n'a pas encore cette distinction (voir sa propre section « Mauvais », point 2).
-4. **Arrêt sur `LLMError` silencieux** — `break` sans logguer ni exposer pourquoi la boucle s'est arrêtée ; le retour `list[StepMetrics]` seul ne permet pas de distinguer un arrêt propre (`final_answer`/`max_iterations`) d'un échec LLM. Accepté pour l'instant (déféré à l'assemblage futur de `SolutionOutput`), mais à garder en tête.
+4. **Impossible de distinguer `max_iterations` atteint de `LLMError`** — les deux donnent `final_answer=None` (voir « Corrigés » : le retour `tuple[...]` distingue déjà un arrêt sur `final_answer` de tout autre arrêt), sans logguer laquelle des deux raisons s'est produite.
 
 ---
 
@@ -71,10 +71,11 @@ Aucun point ouvert — les 3 points identifiés initialement (absence de `try/ex
 1. **Retourne le dict brut** (`result`/`error`/`final_answer`) plutôt qu'une string déjà formatée — laisse le choix du format à `loop.py`, qui a le contexte du `step` courant ; évite de dupliquer la logique d'affichage déjà écrite pour un besoin différent dans `repl._format_response`.
 2. **Réutilise `session.relay_tool_calls`** au lieu d'en écrire une copie — élimine la duplication qui serait sinon apparue entre ce fichier et `repl.py` (même motivation que `session.build_container`, voir `AUDIT_SANDBOX.md`).
 3. **Respecte la séparation générique/spécifique** : `loop.py` n'a pas besoin d'importer `sandbox.container`/`sandbox.mcp_bridge` directement, seulement `sandbox_client.run_code`.
+4. **Testé en conditions Docker réelles depuis le 2026-08-26** — les runs `agent_mbpp` (tâche MBPP 282, succès) et `agent_swebench` (tâche Django réelle, 30 itérations) appellent tous les deux `run_code()` à chaque itération via `loop.py`, contre un vrai conteneur démarré. Le point ❌ ouvert jusqu'ici (« jamais testé en conditions Docker réelles ») est donc clos.
 
 ### ❌ Mauvais
 
-1. **Jamais testé en conditions Docker réelles** — contrairement à `container.py`/`session.py` (testés de bout en bout, voir `AUDIT_SANDBOX.md`), ce fichier n'a été vérifié qu'avec mypy/flake8, pas avec un vrai `run_code()` contre un conteneur démarré.
+Aucun point ouvert.
 
 ---
 
@@ -109,7 +110,7 @@ Aucun point ouvert — les 3 points identifiés initialement (absence de `try/ex
 1. **`_describe_tool` suppose `inputSchema.properties`** (même hypothèse que `session.build_container()`, voir `AUDIT_SANDBOX.md`) — un tool avec un schéma non-`object`/`$ref` ne casserait pas, mais produirait une signature/exemple vides plutôt qu'une vraie description.
 2. **Un seul exemple générique par type, pas par tool** — `_EXAMPLE_VALUES["string"]` donne toujours `"..."`, même pour un paramètre qui attendrait spécifiquement du code Python (`code: str`) ; un exemple plus parlant (ex: un vrai extrait de code) aiderait sans doute davantage le LLM, mais nécessiterait une heuristique par nom de paramètre, pas seulement par type — déféré pour rester générique et sans connaissance codée en dur d'un tool particulier.
 
-Depuis le 2026-08-20, `agent_mbpp/` et `agent_swebench/` ne sont plus des répertoires complètement vides — chacun contient un `task.py` (le modèle de tâche spécifique, déplacé depuis `data_models/`, voir plus bas) — mais toujours aucun CLI/`__main__.py`, donc les 3 commandes du §V.3.1/§V.4.1 restent inexistantes.
+**Mise à jour du 2026-08-26** : `agent_mbpp/__main__.py` et `agent_swebench/__main__.py` existent désormais tous les deux, testés de bout en bout (voir « Corrigés » et `AUDIT_MBPP.md`/`AUDIT_SWEBENCH_TOOLS.md`) — les commandes CLI du §V.3.1/§V.4.1 existent. `agent_mbpp/task.py`/`agent_swebench/task.py` restent les seuls autres fichiers de ces deux répertoires.
 
 ---
 
@@ -168,7 +169,6 @@ Aucun point ouvert.
 
 Par ordre d'impact :
 
-1. ~~**Écrire `agent_mbpp/__main__.py`**~~ **Fait le 2026-08-26** — testé de bout en bout avec la vraie commande du sujet, `solution.json` valide produit avec `success: true`. Détail de l'audit dans `AUDIT_MBPP.md` (périmètre plus adapté, cette CLI est spécifique MBPP).
-2. **Distinguer "aucun bloc trouvé" de "bloc malformé mais interprété"** dans `parsing.py`/`loop.py` (2e cas de feedback explicite du sujet, §V.1) — actuellement seul le premier cas existe
-3. **Formats (b)/(c)/(d) de `parsing.py`** (XML, JSON/Hermes, ReAct) — une fois le format primaire prouvé bout en bout avec un vrai LLM (fait pour (a))
-4. **Affiner `success`** — actuellement `final_answer is not None`, sans vérifier que le dernier `run_tests` avant a bien réussi (l'agent pourrait soumettre après un test raté). Amélioration déjà notée dans `AUDIT_MBPP.md`.
+1. **Distinguer "aucun bloc trouvé" de "bloc malformé mais interprété"** dans `parsing.py`/`loop.py` (2e cas de feedback explicite du sujet, §V.1) — actuellement seul le premier cas existe
+2. **Formats (b)/(c)/(d) de `parsing.py`** (XML, JSON/Hermes, ReAct) — une fois le format primaire prouvé bout en bout avec un vrai LLM (fait pour (a))
+3. **Affiner `success`** — actuellement `final_answer is not None`, sans vérifier que le dernier `run_tests` avant a bien réussi (l'agent pourrait soumettre après un test raté). Amélioration déjà notée dans `AUDIT_MBPP.md`.
