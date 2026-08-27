@@ -55,8 +55,9 @@ You work in a loop: Thought, then Code, then Observation.
 - After your code runs, the result is given back to you as the next
   message (Observation).
 
-The repository is checked out at /testbed. Use the available tools to
-explore it, locate the code responsible for the issue, and fix it.
+The repository is checked out at /workspace/testbed. Use the available
+tools to explore it, locate the code responsible for the issue, and
+fix it.
 
 Available tools:
 {tools_doc}
@@ -74,6 +75,14 @@ Workflow:
 IMPORTANT: You must call run_tests() and confirm your fix works before
 calling final_answer. Never call final_answer without verifying first.
 
+IMPORTANT: run_tests() already runs the test suite in the correct
+environment (interpreter, PYTHONPATH, virtual env). Do NOT try to
+manually re-invoke the test runner yourself via run_command — trust
+run_tests(). As soon as run_tests() reports success (e.g. "OK"), stop
+exploring immediately: call get_patch() and then final_answer(patch)
+in your very next step. Do not keep editing or debugging after a
+successful run_tests() — you are done.
+
 Example of a full reasoning loop:
 
 Thought: I will look for where the reported function is defined.
@@ -81,13 +90,13 @@ Code:
 ```python
 print(search_function_or_class_definition_in_code(name="some_function"))
 ```
-Observation: /testbed/pkg/module.py:42 def some_function(x):
+Observation: /workspace/testbed/pkg/module.py:42 def some_function(x):
 
 Thought: I found it. I will fix the bug.
 Code:
 ```python
 print(edit_file(
-    filepath="/testbed/pkg/module.py",
+    filepath="/workspace/testbed/pkg/module.py",
     old_str="buggy line",
     new_str="fixed line",
 ))
