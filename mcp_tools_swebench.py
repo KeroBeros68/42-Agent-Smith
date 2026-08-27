@@ -105,7 +105,10 @@ def _find_sandbox_container() -> Container:
 
 
 def _exec(
-    container: Container, cmd: list[str], workdir: str | None = None
+    container: Container,
+    cmd: list[str],
+    workdir: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> tuple[str, str, int]:
     """Run a command inside the sandbox container, argv-style (no shell
     interpolation — arguments are never string-concatenated into a shell
@@ -119,7 +122,7 @@ def _exec(
     # no such entry ("unable to find user sandbox"), so the numeric UID
     # is used instead, which Docker accepts without a passwd lookup.
     result = container.exec_run(
-        cmd, workdir=workdir, demux=True, user="1000"
+        cmd, workdir=workdir, demux=True, user="1000", environment=env
     )
     # The docker-stubs type for .output is too loose (bytes | Iterator[bytes]
     # — it doesn't model demux=True specifically), but demux=True guarantees
@@ -519,10 +522,31 @@ def run_tests() -> str:
                            'This is a server-side problem.')
     container = _get_container()
     adapted_script = TASK.eval_script.replace(_TESTBED_ORIGINAL, ROOT_DIR)
+    # Our sandbox is network_mode="none" (§V.2.3) — a plain `pip install
+    # -e .` (build isolation on by default) tries to fetch setuptools
+    # from PyPI, fails ("Temporary failure in name resolution"), and the
+    # editable-install pointer is never refreshed to ROOT_DIR — it keeps
+    # pointing at the image's original /testbed, so the test runner
+    # silently imports the *unedited* code. Found by isolating a real
+    # false-negative: a manually-verified-correct fix still failed
+    # run_tests() until this flag combo (which skips the network-
+    # dependent build step) was added. --no-deps for the same reason
+    # (dependency resolution also needs network).
+    adapted_script = adapted_script.replace(
+        "pip install -e .", "pip install -e . --no-build-isolation --no-deps"
+    )
     stdout, stderr, exit_code = _exec(
         container,
         ["timeout", str(TIMEOUT_DELAY_SEC), "bash", "-c", adapted_script],
         workdir=ROOT_DIR,
+        # PYTHONPATH takes priority over the editable-install pointer,
+        # which stays frozen on the image's original /testbed (pip
+        # install -e . can't refresh it here — no network, and the
+        # user-install fallback needs to write outside our writable
+        # mounts). Forces `import django` (and the rest of the repo) to
+        # resolve from the fixed copy without depending on pip at all —
+        # generic, not specific to Django/conda.
+        env={"PYTHONPATH": ROOT_DIR},
     )
     if exit_code == 124:
         return f'Evaluation timed out ({TIMEOUT_DELAY_SEC}s)!'
