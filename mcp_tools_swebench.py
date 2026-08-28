@@ -37,9 +37,20 @@ try:
     TASK = SWEBenchTaskInput.model_validate(
         json.loads(os.environ.get("SWE_TASK_JSON", "null")) or {}
     )
-
 except (ValidationError, json.JSONDecodeError):
     TASK = None
+
+# Load the timeout delay
+try:
+    TIMEOUT_DELAY_SEC = int(os.environ.get('MCP_TIMEOUT_DELAY', -1))
+    if TIMEOUT_DELAY_SEC < 1:
+        raise ValueError('Invalid timeout delay')
+except ValueError:
+    print('Unable to load the env variable corresponding '
+          'to MCP_TIMEOUT_DELAY. Make sure it\'s present as '
+          'a positive int value (>=1).')
+    exit(1)
+
 
 if TASK is None:
     print(
@@ -51,7 +62,6 @@ if TASK is None:
     exit(1)
 
 # Some evaluation scripts can take some times to run
-TIMEOUT_DELAY_SEC = 600
 MAX_OUTPUT_CHARS = 50_000
 
 
