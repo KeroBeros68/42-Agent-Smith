@@ -164,4 +164,4 @@ if __name__ == "__main__":
         mode = 'stdio'
 
     # Listen
-    mcp.run(transport=mode)
+    mcp.run(transport=mode, show_banner=False)

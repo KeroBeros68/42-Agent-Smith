@@ -554,7 +554,8 @@ def get_patch() -> str:
     container = _get_container()
     stdout, stderr, exit_code = _exec(
         container,
-        ["timeout", str(TIMEOUT_DELAY_SEC), "git", "diff", "HEAD"],
+        ["timeout", str(TIMEOUT_DELAY_SEC),
+         "git", "-c", "core.fileMode=false", 'diff', 'HEAD'],
         workdir=ROOT_DIR,
     )
     if exit_code == 124:
@@ -617,4 +618,4 @@ if __name__ == "__main__":
         mode = 'stdio'
 
     # Listen
-    mcp.run(transport=mode)
+    mcp.run(transport=mode, show_banner=False)
