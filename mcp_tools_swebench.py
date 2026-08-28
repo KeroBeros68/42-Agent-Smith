@@ -20,6 +20,7 @@ from fastmcp import FastMCP
 from pydantic import ValidationError
 
 from student.agent_swebench.task import SWEBenchTaskInput
+from student.mcp_server_shared.share import truncate_output
 
 
 class SWEException(Exception):
@@ -37,9 +38,20 @@ try:
     TASK = SWEBenchTaskInput.model_validate(
         json.loads(os.environ.get("SWE_TASK_JSON", "null")) or {}
     )
-
 except (ValidationError, json.JSONDecodeError):
     TASK = None
+
+# Load the timeout delay
+try:
+    TIMEOUT_DELAY_SEC = int(os.environ.get('MCP_TIMEOUT_DELAY', -1))
+    if TIMEOUT_DELAY_SEC < 1:
+        raise ValueError('Invalid timeout delay')
+except ValueError:
+    print('Unable to load the env variable corresponding '
+          'to MCP_TIMEOUT_DELAY. Make sure it\'s present as '
+          'a positive int value (>=1).')
+    exit(1)
+
 
 if TASK is None:
     print(
@@ -49,29 +61,6 @@ if TASK is None:
         file=sys.stderr,
     )
     exit(1)
-
-# Some evaluation scripts can take some times to run
-TIMEOUT_DELAY_SEC = 600
-MAX_OUTPUT_CHARS = 50_000
-
-
-def truncate_output(text: str) -> str:
-    # Head-only truncation lost the verdict on a real run_tests() output
-    # (1.86M chars, the "Start Test Output" marker sat at char 1,861,195
-    # — past any head-only cutoff) — noisy diagnostics (git diff without
-    # core.fileMode=false, pip install) fill the head, the actual result
-    # is at the tail. Keeping both halves covers each tool's needs:
-    # search/list results (useful from the start) and run_tests/
-    # run_command output (verdict at the end).
-    if len(text) <= MAX_OUTPUT_CHARS:
-        return text
-    half = MAX_OUTPUT_CHARS // 2
-    omitted = len(text) - MAX_OUTPUT_CHARS
-    return (
-        f'{text[:half]}\n'
-        f'(... {omitted} characters omitted ...)\n'
-        f'{text[-half:]}'
-    )
 
 
 # Root of the codebase the MCP server is allowed to explore. A writable
@@ -565,7 +554,8 @@ def get_patch() -> str:
     container = _get_container()
     stdout, stderr, exit_code = _exec(
         container,
-        ["timeout", str(TIMEOUT_DELAY_SEC), "git", "diff", "HEAD"],
+        ["timeout", str(TIMEOUT_DELAY_SEC),
+         "git", "-c", "core.fileMode=false", 'diff', 'HEAD'],
         workdir=ROOT_DIR,
     )
     if exit_code == 124:
@@ -628,4 +618,4 @@ if __name__ == "__main__":
         mode = 'stdio'
 
     # Listen
-    mcp.run(transport=mode)
+    mcp.run(transport=mode, show_banner=False)

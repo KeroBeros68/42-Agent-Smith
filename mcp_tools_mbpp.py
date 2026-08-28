@@ -8,6 +8,8 @@ for the Agent Smith project.
 - Needs a MBPPTaskInput set in the env variable "MBPP_TASK_JSON"
 - Needs a transport value set in the env variable "MCP_TRANSPORT"
     e.g: 'http' or 'stdio'. defaults to 'stdio'
+- Needs a MCP_TIMEOUT_DELAY env variable set to the number of seconds
+    for a subprocess timeout. (>=1)
 """
 
 import json
@@ -20,6 +22,7 @@ from dotenv import load_dotenv
 from fastmcp import FastMCP
 from pydantic import ValidationError
 
+from student.mcp_server_shared.share import truncate_output
 from student.agent_mbpp.task import MBPPTaskInput
 
 
@@ -51,7 +54,17 @@ if TASK is None:
     )
     exit(1)
 
-TIMEOUT_DELAY_SEC = 10
+
+# Load the timeout delay
+try:
+    TIMEOUT_DELAY_SEC = int(os.environ.get('MCP_TIMEOUT_DELAY', -1))
+    if TIMEOUT_DELAY_SEC < 1:
+        raise ValueError('Invalid timeout delay')
+except ValueError:
+    print('Unable to load the env variable corresponding '
+          'to MCP_TIMEOUT_DELAY. Make sure it\'s present as '
+          'a positive int value (>=1).')
+    exit(1)
 
 # --- MCP Tools ---
 
@@ -90,7 +103,7 @@ def run_tests(code: str) -> str:
     except SyntaxError as e:
         loc = f"line {e.lineno}" if e.lineno is not None else ("unknown"
                                                                " location")
-        return (
+        return truncate_output(
             f"SyntaxError in the submitted code: {e.msg} at {loc}. "
             f"Fix it and retry — tests cannot run against invalid Python."
         )
@@ -129,7 +142,8 @@ def run_tests(code: str) -> str:
             failed_tests.append(f"{test}  # TIMEDOUT AFTER "
                                 f"{TIMEOUT_DELAY_SEC} SECONDS")
     if len(failed_tests) != 0:
-        return "Error during the following tests :\n" + "\n".join(failed_tests)
+        return truncate_output(
+            "Error during the following tests :\n" + "\n".join(failed_tests))
     return "All test passed successfully !"
 
 
@@ -150,4 +164,4 @@ if __name__ == "__main__":
         mode = 'stdio'
 
     # Listen
-    mcp.run(transport=mode)
+    mcp.run(transport=mode, show_banner=False)
