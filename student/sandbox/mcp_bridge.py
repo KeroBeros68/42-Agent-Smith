@@ -48,7 +48,9 @@ class MCPBridge:
             return StdioTransport(
                 command=command,
                 args=args,
-                env={**os.environ, "MCP_TRANSPORT": "stdio"},
+                env={**os.environ,
+                     "MCP_TRANSPORT": "stdio",
+                     "MCP_TIMEOUT_DELAY": "60"},
             )
         if server_url is not None:
             return server_url
