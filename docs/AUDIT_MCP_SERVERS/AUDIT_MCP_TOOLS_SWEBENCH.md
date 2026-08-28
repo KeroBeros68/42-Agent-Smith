@@ -42,6 +42,7 @@ Vérifié : les 9 outils sont importables (`import mcp_tools_swebench` avec `SWE
 10. **Chargement de tâche robuste et démarrage vérifié** — `SWEBenchTaskInput.model_validate` avec interception `ValidationError`/`JSONDecodeError`, message clair + `exit(1)` si tâche absente (refus de servir sans contrat), re-vérification `TASK is None` en entrée de `run_tests` (défense en profondeur, `5e73074`). Le timeout est chargé depuis `MCP_TIMEOUT_DELAY` avec validation `>= 1` (le bridge l'injecte à `"60"`). Vérifié : import OK avec env valide.
 11. **`flake8` et `mypy` propres** — exit 0 / *Success: no issues found in 1 source file*, re-vérifiés le jour de l'audit. Code commenté et documenté (chaque script auxiliaire, chaque choix de `user="1000"`, `demux`, `timeout` a un commentaire expliquant le *pourquoi*, souvent tiré d'un test réel).
 12. **Discovery du conteneur alignée sur l'architecture « un conteneur par session »** — `_find_sandbox_container` matche l'image dérivée `sandbox-executor:<hash>` que [container.py:148](student/sandbox/container.py#L148) génère pour **toute** session (MBPP et SWE-bench confondus, via `FROM base_image`). Cohérent avec « one sandbox container runs at a time ». *(Fragilité si plusieurs sessions : ❌ #4.)*
+13. **Banner FastMCP désactivé (`show_banner=False`, `f57af89`)** — `mcp.run(transport=mode, show_banner=False)` sur les deux serveurs (SWE-bench et MBPP). Vérifié dans le code FastMCP : le banner est émis sur **stderr** (`Console(stderr=True)` dans `fastmcp.utilities.cli.log_server_banner`) — il ne corrompt donc pas le canal JSON-RPC de stdio, mais il noyait les logs du lanceur et faussait la lecture des erreurs de démarrage. Supprimé : logs propres, démarrage silencieux mais vérifiable via les messages d'erreur sur stderr.
 
 ---
 
@@ -74,7 +75,7 @@ Points déjà réglés dans l'historique git de ce fichier ou le working tree �
 | Timeout d'exécution codé en dur | Timeout chargé depuis `MCP_TIMEOUT_DELAY` avec validation (entier ≥ 1) ; injection du bridge (`MCP_TIMEOUT_DELAY="60"`) (cf. `AUDIT_MCP_TOOLS_MBPP.md`) | `a0f5a64` (serveur) + `e08300e` (bridge) |
 | Couplage `truncate_output` depuis le serveur frère | Import depuis le module partagé sans effet de bord `student/mcp_server_shared/share.py` (même résolution que MBPP) | `e08300e` |
 | Aucun message d'erreur au lancement sans tâche | Message clair + `exit(1)` si `SWE_TASK_JSON` absent/invalide | `5e73074` |
-| Patch `get_patch` sans `-c core.fileMode=false` (non-conformité §V.4 l. 472) | Ajout du drapeau — commande `git -c core.fileMode=false diff HEAD` | working tree (non committé) |
+| Patch `get_patch` sans `-c core.fileMode=false` (non-conformité §V.4 l. 472) | Ajout du drapeau — commande `git -c core.fileMode=false diff HEAD` | `f57af89` |
 
 ---
 
