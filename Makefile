@@ -45,7 +45,7 @@ install:
 
 lint: install
 	$(PYTHON) -m flake8 $(LINT_CHECK)
-	$(PYTHON) -m -m mypy $(LINT_CHECK) --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs
+	$(PYTHON) -m mypy $(LINT_CHECK) --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs --explicit-package-bases
 
 lint-strict: install
 	$(PYTHON) -m flake8 $(LINT_CHECK)
