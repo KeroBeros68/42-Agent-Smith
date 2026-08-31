@@ -568,6 +568,9 @@ def get_patch() -> str:
     return truncate_output(stdout)
 
 
+_ORIGINAL_TESTBED_RE = re.compile(r'(?<!/workspace)/testbed\b')
+
+
 @mcp.tool
 def run_command(command: str, workdir: str) -> str:
     """
@@ -579,6 +582,11 @@ def run_command(command: str, workdir: str) -> str:
     if not path.is_relative_to(ROOT_DIR):
         return ('Error: you are trying to interract with a file outside your '
                 f'allowed directory ({ROOT_DIR})')
+
+    if _ORIGINAL_TESTBED_RE.search(command):
+        return ('Error: your command references /testbed, the original '
+                f'read-only checkout. Use {ROOT_DIR} instead — it is the '
+                'writable copy where your edits actually live.')
 
     container = _get_container()
     _, _, exists_code = _exec(container, ["test", "-d", workdir])
