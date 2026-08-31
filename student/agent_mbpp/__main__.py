@@ -123,7 +123,9 @@ def main() -> None:
         total_time_seconds=0.0,
     )
 
-    mcp_bridge = MCPBridge(stdio_command=f"python3 {MCP_SERVER_SCRIPT}")
+    mcp_bridge = MCPBridge(
+        stdio_command=f"python3 {MCP_SERVER_SCRIPT}", mcp_timeout_delay_sec=10
+    )
     try:
         mcp_bridge.connect()
         tools = mcp_bridge.list_tools()

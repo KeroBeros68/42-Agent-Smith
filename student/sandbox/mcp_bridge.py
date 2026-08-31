@@ -31,8 +31,13 @@ class MCPBridge:
         self,
         stdio_command: str | None = None,
         server_url: str | None = None,
+        mcp_timeout_delay_sec: int = 60,
     ) -> None:
-        self._client = Client(self._build_transport(stdio_command, server_url))
+        self._client = Client(
+            self._build_transport(
+                stdio_command, server_url, mcp_timeout_delay_sec
+            )
+        )
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=self._loop.run_forever, daemon=True
@@ -41,7 +46,9 @@ class MCPBridge:
 
     @staticmethod
     def _build_transport(
-        stdio_command: str | None, server_url: str | None
+        stdio_command: str | None,
+        server_url: str | None,
+        mcp_timeout_delay_sec: int,
     ) -> Any:
         if stdio_command is not None:
             command, *args = shlex.split(stdio_command)
@@ -50,7 +57,7 @@ class MCPBridge:
                 args=args,
                 env={**os.environ,
                      "MCP_TRANSPORT": "stdio",
-                     "MCP_TIMEOUT_DELAY": "60"},
+                     "MCP_TIMEOUT_DELAY": str(mcp_timeout_delay_sec)},
             )
         if server_url is not None:
             return server_url
