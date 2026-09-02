@@ -186,7 +186,7 @@ def main() -> None:
                 mcp_bridge,
                 model_name=args.model_name,
                 system_prompt=system_prompt,
-                max_iterations=args.max_iterations,
+                max_iterations=args.max_iterations
             )
 
         solution.system_prompt = system_prompt

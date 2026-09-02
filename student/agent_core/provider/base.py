@@ -122,16 +122,21 @@ class LLM(AbstractLLM):
         """
         # Query to the LLM to answer the prompt
         start_time = time.time_ns()
-        try:
-            llm_gen = self.__router.completion(
-                model=self.__model_name,
-                messages=messages,
-                stream=False,
-            )
-        except Exception as e:
-            raise LLMError(
-                f"LLM call failed for model {self.__model_name!r}: {e}"
-            ) from e
+        # try:
+        #     llm_gen = self.__router.completion(
+        #         model=self.__model_name,
+        #         messages=messages,
+        #         stream=False,
+        #     )
+        # except Exception as e:
+        #     raise LLMError(
+        #         f"LLM call failed for model {self.__model_name!r}: {e}"
+        #     ) from e
+        llm_gen = self.__router.completion(
+            model=self.__model_name,
+            messages=[*messages, {"role": "user", "content": "Go ahead."}],
+            stream=False,
+        )
         end_time = time.time_ns()
 
         # stream=False guarantees a ModelResponse at runtime, but the

@@ -18,6 +18,7 @@ def run(
     model_name: str,
     system_prompt: str,
     max_iterations: int,
+    print_steps: bool = False
 ) -> tuple[list[StepMetrics], str | None]:
     """Run the agent loop and return the per-step metrics and final answer.
 
