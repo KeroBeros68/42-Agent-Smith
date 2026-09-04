@@ -76,18 +76,44 @@ def _find_sandbox_container() -> Container:
 
     MCP tools run outside the sandbox's execution restrictions (§V.2.5),
     but for SWE-bench the actual repository only exists inside that
-    container's filesystem — this finds it by its derived image tag
-    (unique per session: one sandbox container runs at a time, per the
-    project's whole architecture).
+    container's filesystem. Matched by image tag prefix, and — when
+    SANDBOX_OWNER_PID is set (mcp_bridge.py sets it for every spawn) —
+    also by the matching Docker label container.py stamps the container
+    with at creation. The PID check is what actually disambiguates:
+    found for real that two sandbox sessions running at once (e.g. an
+    MBPP run alongside a SWE-bench one) made this silently return
+    whichever container happened to be first in Docker's listing —
+    including one with no /testbed at all, breaking every SWE-bench
+    tool with a confusing "Could not prepare a writable copy" error
+    that had nothing to do with the actual command being run.
     """
     client = docker.from_env()
+    owner_pid = os.environ.get("SANDBOX_OWNER_PID")
+    candidates = []
     for container in client.containers.list():
         image = container.image
         if image is None:
             continue
         tags = image.tags or []
-        if any(tag.startswith(_SANDBOX_IMAGE_PREFIX) for tag in tags):
-            return container
+        if not any(tag.startswith(_SANDBOX_IMAGE_PREFIX) for tag in tags):
+            continue
+        if owner_pid is not None:
+            if container.labels.get("agent-smith.owner-pid") == owner_pid:
+                return container
+            continue
+        candidates.append(container)
+    if owner_pid is not None:
+        raise SWEException(
+            "No running sandbox container found for this session "
+            f"(owner PID {owner_pid}) — is the sandbox started?"
+        )
+    if len(candidates) > 1:
+        raise SWEException(
+            "Multiple sandbox containers found and none tagged for this "
+            "session — cannot disambiguate."
+        )
+    if candidates:
+        return candidates[0]
     raise SWEException(
         "No running sandbox container found — is the sandbox started?"
     )

@@ -57,7 +57,12 @@ class MCPBridge:
                 args=args,
                 env={**os.environ,
                      "MCP_TRANSPORT": "stdio",
-                     "MCP_TIMEOUT_DELAY": str(mcp_timeout_delay_sec)},
+                     "MCP_TIMEOUT_DELAY": str(mcp_timeout_delay_sec),
+                     # Same PID that session.build_container() will later
+                     # label the container with — lets a SWE-bench server
+                     # find its own container even with another sandbox
+                     # session running concurrently (see container.py).
+                     "SANDBOX_OWNER_PID": str(os.getpid())},
             )
         if server_url is not None:
             return server_url

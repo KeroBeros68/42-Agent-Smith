@@ -13,6 +13,13 @@ from agent_core.schemas import StepMetrics
 from sandbox.container import SandboxContainer
 from sandbox.mcp_bridge import MCPBridge
 
+_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+
+def _announce(step: int, word: str) -> None:
+    frame = _SPINNER_FRAMES[step % len(_SPINNER_FRAMES)]
+    print(f"{frame} [step {step}] {word}...")
+
 
 def run(
     container: SandboxContainer,
@@ -65,6 +72,7 @@ def run(
         ):
             break
 
+        _announce(step, "Thinking")
         try:
             metrics = llm.get_response(step, messages)
         except LLMError:
@@ -76,10 +84,12 @@ def run(
 
         code, warning = extract_code(metrics.llm_output)
         if code is None:
+            _announce(step, "Retrying")
             observation = "No valid code block was found in your response."
             messages.append({"role": "user", "content": observation})
             continue
 
+        _announce(step, "Executing")
         metrics.sandbox_input = code
         response = run_code(container, mcp_bridge, code)
         observation = _format_observation(response)
@@ -90,6 +100,7 @@ def run(
 
         if response.get("type") == "final_answer":
             final_answer = response.get("answer", "")
+            _announce(step, "Done")
             break
 
     return steps, final_answer

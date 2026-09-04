@@ -16,6 +16,7 @@ Uses docker-py. Responsibilities:
 import hashlib
 import io
 import json
+import os
 import tarfile
 from pathlib import Path
 from typing import Any, cast
@@ -179,6 +180,14 @@ class SandboxContainer:
                 "SANDBOX_CONFIG_JSON": self._config.model_dump_json(),
                 "MCP_TOOLS_JSON": json.dumps(self._tools),
             },
+            # Lets mcp_tools_swebench.py's _find_sandbox_container()
+            # target the container that belongs to *this* CLI process,
+            # not just the first sandbox-executor:* image it finds —
+            # ambiguous (and observed to silently hit the wrong
+            # container) with two sessions running at once, since
+            # MCPBridge only knows this PID, not a container ID (the
+            # container doesn't exist yet when it connects).
+            labels={"agent-smith.owner-pid": str(os.getpid())},
         )
         container.start()
         self._container = container
