@@ -158,6 +158,31 @@ def _get_container() -> Container:
 # on. run_tests() rewrites the script to target that copy instead.
 _TESTBED_ORIGINAL = '/testbed'
 
+_PYTHONWARNINGS_RE = re.compile(r"PYTHONWARNINGS=(['\"]?)([^'\"\s]*)\1")
+
+
+def _suppress_deprecation_noise(script: str) -> str:
+    """Append ignore::DeprecationWarning to any inline PYTHONWARNINGS=...
+    assignment in the eval_script, on top of the env-level default passed
+    to _exec() — needed because `VAR=val cmd` fully overrides an
+    inherited env var for that one command, not merges with it. Found on
+    a real task (sympy__sympy-13480): its own test invocation already
+    sets PYTHONWARNINGS='ignore::UserWarning,ignore::SyntaxWarning',
+    silently discarding our env-level default for that command and
+    leaving DeprecationWarning noise unsuppressed.
+    """
+    def _add(match: re.Match) -> str:
+        quote, value = match.group(1), match.group(2)
+        if "DeprecationWarning" in value:
+            return match.group(0)
+        new_value = (
+            f"{value},ignore::DeprecationWarning"
+            if value else "ignore::DeprecationWarning"
+        )
+        return f"PYTHONWARNINGS={quote}{new_value}{quote}"
+    return _PYTHONWARNINGS_RE.sub(_add, script)
+
+
 _WRITE_FILE_SCRIPT = """
 import base64, sys
 filepath, b64content = sys.argv[1], sys.argv[2]
@@ -524,6 +549,14 @@ def run_tests() -> str:
     adapted_script = adapted_script.replace(
         "pip install -e .", "pip install -e . --no-build-isolation --no-deps"
     )
+    # Repetitive DeprecationWarning noise (e.g. sympy's `collections`
+    # ABC imports, re-triggered per test module) can fill even the
+    # truncate_output() tail budget and bury the real pass/fail verdict
+    # — found on a real run (sympy__sympy-13480): a genuinely correct
+    # fix, confirmed independently via the moulinette, was unreadable
+    # from the agent's own observation because "45 passed" never made
+    # it into the truncated output.
+    adapted_script = _suppress_deprecation_noise(adapted_script)
     stdout, stderr, exit_code = _exec(
         container,
         ["timeout", str(TIMEOUT_DELAY_SEC), "bash", "-c", adapted_script],
@@ -534,12 +567,29 @@ def run_tests() -> str:
         # user-install fallback needs to write outside our writable
         # mounts). Forces `import django` (and the rest of the repo) to
         # resolve from the fixed copy without depending on pip at all —
-        # generic, not specific to Django/conda.
-        env={"PYTHONPATH": ROOT_DIR},
+        # generic, not specific to Django/conda. PYTHONWARNINGS is a
+        # baseline only — a script that sets its own (via `VAR=val cmd`)
+        # fully overrides it for that command; _suppress_deprecation_noise
+        # above patches those cases directly in the script text.
+        env={
+            "PYTHONPATH": ROOT_DIR,
+            "PYTHONWARNINGS": "ignore::DeprecationWarning",
+        },
     )
     if exit_code == 124:
         return f'Evaluation timed out ({TIMEOUT_DELAY_SEC}s)!'
-    return truncate_output(f'=== stdout ===\n{stdout}=== stderr ===\n{stderr}')
+    # Truncated separately, not as one concatenated blob: stderr carries
+    # the full `bash -x` trace of the eval_script (conda activation,
+    # git...), often large enough on its own to push the real pass/fail
+    # verdict — which sits right at the stdout/stderr boundary — into
+    # the gap that a single combined truncation would cut. Found on a
+    # real task (sympy__sympy-13480): the verdict was present in stdout
+    # but still lost because the combined blob's truncation window
+    # landed elsewhere.
+    return (
+        truncate_output(f'=== stdout ===\n{stdout}')
+        + truncate_output(f'=== stderr ===\n{stderr}')
+    )
 
 
 @mcp.tool
@@ -607,6 +657,32 @@ def run_command(command: str, workdir: str) -> str:
             f'{truncate_output(stderr)}\n'
             '=== EXIT CODE ===\n'
             f'{exit_code}')
+
+
+# --- MCP Resources & Prompts ---
+
+
+@mcp.resource("swebench://task")
+def task_resource() -> str:
+    """The current SWE-bench task: instance id, repo, issue, hints."""
+    hints = TASK.hints_text or "(none)"
+    return (
+        f"Instance ID: {TASK.instance_id}\n"
+        f"Repository: {TASK.repo}\n"
+        f"Problem statement:\n{TASK.problem_statement}\n\n"
+        f"Hints:\n{hints}"
+    )
+
+
+@mcp.prompt
+def solve_swebench_task() -> str:
+    """Prompt template: fix the reported bug and verify it."""
+    return (
+        f"Fix the following bug in {TASK.repo}, checked out at {ROOT_DIR}.\n\n"
+        f"Issue:\n{TASK.problem_statement}\n\n"
+        "Explore the repository, apply a fix, verify it with run_tests(), "
+        "then submit the diff via get_patch() and final_answer(patch)."
+    )
 
 
 if __name__ == "__main__":

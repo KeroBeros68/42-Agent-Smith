@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from agent_core import loop, manual
-from agent_core.schemas import SolutionOutput
+from agent_core.schemas import SolutionOutput, StepMetrics
 from agent_mbpp.task import MBPPTaskInput
 from pydantic import ValidationError
 from sandbox import session
@@ -32,6 +32,12 @@ SANDBOX_BUILD_CONTEXT = REPO_ROOT / "student" / "sandbox"
 SANDBOX_TEMPLATE = REPO_ROOT / "sandbox_template.json"
 MCP_SERVER_SCRIPT = REPO_ROOT / "mcp_tools_mbpp.py"
 DEFAULT_MAX_ITERATIONS = 10
+# §VI.1.1 — MBPP's official cumulative limits (moulinette/models.py
+# mbpp_defaults()), enforced here too so a run stops on its own instead
+# of only being flagged after the fact by the moulinette's validation.
+MAX_INPUT_TOKENS = 6_000
+MAX_OUTPUT_TOKENS = 1_500
+MAX_TIME_SECONDS = 120.0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,6 +92,30 @@ final_answer("def add_one(x):\\n    return x + 1")
 Task: {task.task_definition}
 Function signature: {task.function_definition}
 """
+
+
+def _last_run_tests_passed(steps: list[StepMetrics]) -> bool:
+    """Whether the most recent run_tests() call, if any, reported success.
+
+    Scans backward for the last step that called run_tests, regardless
+    of what happened after it — a strict "must be the step immediately
+    before final_answer" check was tried and rejected: a real run showed
+    the model re-stating the exact same (already-verified) code for a
+    couple of inert steps before submitting, which that stricter check
+    flagged as unverified even though nothing had changed since the
+    passing test. Residual gap: if the code is genuinely edited after
+    the last passing test and resubmitted without a re-test, this still
+    reports success — not caught without diffing sandbox_input content
+    across steps, considered disproportionate for now. mcp_tools_mbpp.py
+    always returns this exact string on success, so the check itself is
+    reliable (contrast with agent_swebench's version of this function,
+    which can only heuristically guess from arbitrary eval_script
+    output).
+    """
+    for s in reversed(steps):
+        if s.sandbox_input and "run_tests(" in s.sandbox_input:
+            return "All test passed successfully !" in (s.sandbox_output or "")
+    return False
 
 
 def write_output(output_path: Path, solution: SolutionOutput) -> None:
@@ -143,6 +173,9 @@ def main() -> None:
                 model_name=args.model_name,
                 system_prompt=system_prompt,
                 max_iterations=args.max_iterations,
+                max_input_tokens=MAX_INPUT_TOKENS,
+                max_output_tokens=MAX_OUTPUT_TOKENS,
+                max_time_seconds=MAX_TIME_SECONDS,
             )
 
         solution.system_prompt = system_prompt
@@ -151,7 +184,9 @@ def main() -> None:
         solution.total_requests = len(steps)
         solution.total_input_tokens = sum(s.input_tokens for s in steps)
         solution.total_output_tokens = sum(s.output_tokens for s in steps)
-        solution.success = final_answer is not None
+        solution.success = (
+            final_answer is not None and _last_run_tests_passed(steps)
+        )
         solution.solution = final_answer or ""
     except Exception as e:
         # Broad on purpose: this is the outermost boundary of the CLI.

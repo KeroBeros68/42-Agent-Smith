@@ -147,6 +147,32 @@ def run_tests(code: str) -> str:
     return "All test passed successfully !"
 
 
+# --- MCP Resources & Prompts ---
+
+
+@mcp.resource("mbpp://task")
+def task_resource() -> str:
+    """The current MBPP task: definition, function signature, and tests."""
+    tests = "\n".join(TASK.test_list) if TASK.test_list else "(none)"
+    return (
+        f"Task ID: {TASK.task_id}\n"
+        f"Definition: {TASK.task_definition}\n"
+        f"Function signature: {TASK.function_definition}\n"
+        f"Tests:\n{tests}"
+    )
+
+
+@mcp.prompt
+def solve_mbpp_task() -> str:
+    """Prompt template: solve the current MBPP task and verify it."""
+    return (
+        "Solve the following task by writing a single Python function "
+        f"matching this signature: {TASK.function_definition}\n\n"
+        f"Task: {TASK.task_definition}\n\n"
+        "Verify your solution with run_tests before calling final_answer."
+    )
+
+
 if __name__ == "__main__":
     # Get transport mode from env variable MCP_TRANSPORT
     transport_mode = os.environ.get("MCP_TRANSPORT", "stdio")

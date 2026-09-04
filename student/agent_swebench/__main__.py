@@ -14,12 +14,13 @@ SWE-bench system prompt, and success/solution derivation — the loop itself
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
 
 from agent_core import loop, manual
-from agent_core.schemas import SolutionOutput
+from agent_core.schemas import SolutionOutput, StepMetrics
 from agent_swebench.task import SWEBenchTaskInput
 from pydantic import ValidationError
 from sandbox import session
@@ -30,6 +31,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SANDBOX_TEMPLATE = REPO_ROOT / "sandbox_template.json"
 MCP_SERVER_SCRIPT = REPO_ROOT / "mcp_tools_swebench.py"
 DEFAULT_MAX_ITERATIONS = 30
+# §VI.1.2 — SWE-bench's official cumulative limits (moulinette/models.py
+# swebench_defaults()), enforced here too so a run stops on its own
+# instead of only being flagged after the fact by the moulinette's
+# validation.
+MAX_INPUT_TOKENS = 300_000
+MAX_OUTPUT_TOKENS = 10_000
+MAX_TIME_SECONDS = 900.0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -128,6 +136,53 @@ Issue: {task.problem_statement}
 {hints}"""
 
 
+_PYTEST_PASSED_RE = re.compile(r'\b\d+\s+passed\b')
+_PYTEST_FAILED_RE = re.compile(r'\b\d+\s+failed\b')
+
+
+def _last_run_tests_passed(steps: list[StepMetrics]) -> bool:
+    """Whether the most recent run_tests() call, if any, looked successful.
+
+    Scans backward for the last step that called run_tests, regardless
+    of what happened after it — a strict "must be the step immediately
+    before final_answer" check was tried and rejected on the MBPP side
+    (see that file's version of this function): a real run showed the
+    model re-stating already-verified, unchanged code for a couple of
+    inert steps before submitting, which the stricter check wrongly
+    flagged as unverified. Residual gap: if the code is genuinely edited
+    after the last passing test and resubmitted without a re-test, this
+    still reports success — not caught without diffing sandbox_input
+    content across steps, disproportionate for now.
+
+    Best-effort on the content check too: run_tests() returns the repo's
+    own test runner output verbatim, with no universal pass/fail marker
+    across SWE-bench tasks — unlike MBPP, where mcp_tools_mbpp.py returns
+    one exact, controlled string. Recognizes two real conventions seen on
+    real runs: unittest ("OK", no "FAILED") and pytest ("N passed", no
+    "N failed") — found the pytest one was needed on pydata__xarray-4629,
+    a genuinely correct fix that this function reported as unverified
+    because it only checked the unittest convention. Still best-effort:
+    not guaranteed for every repo's test runner (e.g. sympy's own
+    `bin/test` happens to say "N passed" too, so it's covered by luck,
+    not by design — a runner with a wholly different wording would still
+    conservatively return False rather than guessing).
+
+    Deliberately does NOT reject on a bare "ERROR:" substring — tried
+    that, found it false-negatives on a real, otherwise-correct run
+    (sympy__sympy-13480): the eval_script's own `pip install -e .`
+    step fails on this sandbox for unrelated, already-handled reasons
+    (see run_tests()'s PYTHONPATH comment) and prints "ERROR: Could not
+    install packages...", which isn't a test result at all.
+    """
+    for s in reversed(steps):
+        if s.sandbox_input and "run_tests(" in s.sandbox_input:
+            out = s.sandbox_output or ""
+            if "FAILED" in out or _PYTEST_FAILED_RE.search(out):
+                return False
+            return "OK" in out or bool(_PYTEST_PASSED_RE.search(out))
+    return False
+
+
 def write_output(output_path: Path, solution: SolutionOutput) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
@@ -187,6 +242,9 @@ def main() -> None:
                 model_name=args.model_name,
                 system_prompt=system_prompt,
                 max_iterations=args.max_iterations,
+                max_input_tokens=MAX_INPUT_TOKENS,
+                max_output_tokens=MAX_OUTPUT_TOKENS,
+                max_time_seconds=MAX_TIME_SECONDS,
             )
 
         solution.system_prompt = system_prompt
@@ -195,7 +253,9 @@ def main() -> None:
         solution.total_requests = len(steps)
         solution.total_input_tokens = sum(s.input_tokens for s in steps)
         solution.total_output_tokens = sum(s.output_tokens for s in steps)
-        solution.success = final_answer is not None
+        solution.success = (
+            final_answer is not None and _last_run_tests_passed(steps)
+        )
         solution.solution = final_answer or ""
     except Exception as e:
         # Broad on purpose — same rationale as agent_mbpp/__main__.py.
