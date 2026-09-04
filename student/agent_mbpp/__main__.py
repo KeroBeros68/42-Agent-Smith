@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-from agent_core import loop, manual
+from agent_core import loop, manual, shutdown
 from agent_core.schemas import SolutionOutput, StepMetrics
 from agent_mbpp.task import MBPPTaskInput
 from pydantic import ValidationError
@@ -37,7 +37,11 @@ DEFAULT_MAX_ITERATIONS = 10
 # of only being flagged after the fact by the moulinette's validation.
 MAX_INPUT_TOKENS = 6_000
 MAX_OUTPUT_TOKENS = 1_500
-MAX_TIME_SECONDS = 120.0
+# 90% of the hard 120s external limit (moulinette's run-agent, SIGTERM
+# then SIGKILL after a 10s grace period) — leaves room for our own
+# graceful shutdown (write a full solution.json, stop the container) to
+# win the race instead of relying solely on shutdown.install_sigterm_handler().
+MAX_TIME_SECONDS = 108.0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -126,6 +130,7 @@ def write_output(output_path: Path, solution: SolutionOutput) -> None:
 
 
 def main() -> None:
+    shutdown.install_sigterm_handler()
     args = build_parser().parse_args()
     start_time = time.time()
 
