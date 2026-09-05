@@ -1,6 +1,7 @@
 """Extract LLM-generated Python code from a model response (§V.1.2).
 
-Formats (a), (b), (c), and (d) of the subject.
+Formats (a), (b), (c), and (d) of the subject, plus a DeepSeek-specific
+DSML "python block" dialect found empirically (see extract_code()).
 """
 
 import json
@@ -15,6 +16,10 @@ _UNCLOSED_FENCE_WARNING = (
     "interpreted as code — always close your code blocks."
 )
 
+_DSML_PYTHON_RE = re.compile(
+    r'<[^>]*\bpython\b[^>]*>(.*?)</[^>]+>',
+    re.DOTALL,
+)
 _TOOL_CALL_RE = re.compile(
     r'<[^>]*\binvoke\b[^>]*\bname="([^"]+)"[^>]*>(.*?)</[^>]*\binvoke\b[^>]*>',
     re.DOTALL,
@@ -45,11 +50,14 @@ def extract_code(llm_output: str) -> tuple[str | None, str | None]:
     ```python fence opened but never closed — None otherwise.
 
     Tries the primary format (a) first (fenced ```python block), then
-    its malformed/unclosed variant, then falls back in order to formats
-    (b) XML tool calls, (c) JSON/Hermes tool calls, (d) ReAct — some
-    models default to their own trained tool-calling syntax instead of
-    the fenced-block pattern demonstrated in the system prompt's worked
-    example (found empirically for format (b) with DeepSeek).
+    its malformed/unclosed variant, then a DeepSeek-specific native
+    "python block" tag (own dialect, distinct from — and found later
+    than — its (b) invoke/parameter dialect below), then falls back in
+    order to formats (b) XML tool calls, (c) JSON/Hermes tool calls, (d)
+    ReAct — some models default to their own trained tool-calling syntax
+    instead of the fenced-block pattern demonstrated in the system
+    prompt's worked example (found empirically for format (b), and
+    later this DSML-python variant, both with DeepSeek).
     """
     match = _CODE_BLOCK_RE.search(llm_output)
     if match is not None:
@@ -58,6 +66,10 @@ def extract_code(llm_output: str) -> tuple[str | None, str | None]:
     code = _extract_unclosed_code_block(llm_output)
     if code is not None:
         return code, _UNCLOSED_FENCE_WARNING
+
+    match = _DSML_PYTHON_RE.search(llm_output)
+    if match is not None:
+        return match.group(1).strip(), None
 
     code = _extract_xml_tool_calls(llm_output)
     if code is not None:

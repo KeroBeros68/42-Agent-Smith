@@ -70,10 +70,19 @@ except ValueError:
 
 
 @mcp.tool
-def run_tests(code: str) -> str:
-    """Run unit tests to check if a given function passes the unit tests."""
-    failed_tests: list[str] = []
+def run_tests(code: str, test_list: list[str] | None = None) -> str:
+    """Run unit tests to check if a given function passes the unit tests.
 
+    test_list is optional: when the moulinette tests this tool in
+    isolation, it can pass its own assertions directly (matches the
+    subject's run_tests(code, test_list) signature); the real agent
+    loop never supplies it, so the task's own hidden TASK.test_list is
+    used instead — keeps the tests hidden from the LLM's own prompt,
+    the whole point of testing this way rather than showing them
+    upfront.
+
+    Returns a JSON string: {"success": bool, "output": str}.
+    """
     # Verify that the task is valid
     if TASK is None:
         raise MBPPException(
@@ -83,9 +92,17 @@ def run_tests(code: str) -> str:
             " this is a server-side error."
         )
 
-    if len(TASK.test_list) == 0:
-        return ("There are no available tests for this task. "
-                "You may skip testing.")
+    effective_tests = test_list if test_list else TASK.test_list
+    failed_tests: list[str] = []
+
+    if len(effective_tests) == 0:
+        return json.dumps({
+            "success": True,
+            "output": (
+                "There are no available tests for this task. "
+                "You may skip testing."
+            ),
+        })
 
     imports = "\n".join(TASK.test_imports)
 
@@ -103,16 +120,19 @@ def run_tests(code: str) -> str:
     except SyntaxError as e:
         loc = f"line {e.lineno}" if e.lineno is not None else ("unknown"
                                                                " location")
-        return truncate_output(
-            f"SyntaxError in the submitted code: {e.msg} at {loc}. "
-            f"Fix it and retry — tests cannot run against invalid Python."
-        )
+        return json.dumps({
+            "success": False,
+            "output": truncate_output(
+                f"SyntaxError in the submitted code: {e.msg} at {loc}. "
+                f"Fix it and retry — tests cannot run against invalid Python."
+            ),
+        })
 
     # Indent all lines to put the code inside a try/except
     indented_code = "\n".join("    " + line for line in code.splitlines())
 
     # Run each unit test
-    for test in TASK.test_list:
+    for test in effective_tests:
         try:
             proc = subprocess.run(
                 [
@@ -142,9 +162,12 @@ def run_tests(code: str) -> str:
             failed_tests.append(f"{test}  # TIMEDOUT AFTER "
                                 f"{TIMEOUT_DELAY_SEC} SECONDS")
     if len(failed_tests) != 0:
-        return truncate_output(
+        output = truncate_output(
             "Error during the following tests :\n" + "\n".join(failed_tests))
-    return "All test passed successfully !"
+        return json.dumps({"success": False, "output": output})
+    return json.dumps({
+        "success": True, "output": "All test passed successfully !"
+    })
 
 
 # --- MCP Resources & Prompts ---

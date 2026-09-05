@@ -72,9 +72,9 @@ Available tools:
 When you are confident the task is solved, call final_answer(code) with the
 complete function code as a string, instead of writing more code.
 
-IMPORTANT: You must call run_tests on your code and see "All test passed
-successfully !" before calling final_answer. Never call final_answer on code
-you have not verified with run_tests first.
+IMPORTANT: You must call run_tests on your code and check that the returned
+JSON has "success": true before calling final_answer. Never call
+final_answer on code you have not verified with run_tests first.
 
 Example of a full reasoning loop:
 
@@ -85,7 +85,7 @@ def add_one(x):
     return x + 1
 print(run_tests(code="def add_one(x):\\n    return x + 1"))
 ```
-Observation: All test passed successfully !
+Observation: {{"success": true, "output": "All test passed successfully !"}}
 
 Thought: The tests passed, so I can submit this as the final answer.
 Code:
@@ -110,15 +110,22 @@ def _last_run_tests_passed(steps: list[StepMetrics]) -> bool:
     passing test. Residual gap: if the code is genuinely edited after
     the last passing test and resubmitted without a re-test, this still
     reports success — not caught without diffing sandbox_input content
-    across steps, considered disproportionate for now. mcp_tools_mbpp.py
-    always returns this exact string on success, so the check itself is
-    reliable (contrast with agent_swebench's version of this function,
-    which can only heuristically guess from arbitrary eval_script
+    across steps, considered disproportionate for now.
+
+    mcp_tools_mbpp.py's run_tests() returns a JSON string
+    ({"success": bool, "output": str}) — parsed properly rather than a
+    substring match, now that it's a real structured contract (contrast
+    with agent_swebench's version of this function, which can only
+    heuristically guess from arbitrary, unstructured eval_script
     output).
     """
     for s in reversed(steps):
         if s.sandbox_input and "run_tests(" in s.sandbox_input:
-            return "All test passed successfully !" in (s.sandbox_output or "")
+            try:
+                result = json.loads(s.sandbox_output or "")
+            except json.JSONDecodeError:
+                return False
+            return bool(result.get("success", False))
     return False
 
 

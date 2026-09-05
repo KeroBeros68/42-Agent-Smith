@@ -24,16 +24,23 @@ from moulinette.mbpp import InteractMBPP
 from moulinette.swebench import InteractSweBench, SEED_POOL, EXAM_POOL
 
 # Silences a harmless multiprocess.ResourceTracker AttributeError on Python 3.12 shutdown.
+# Guarded with hasattr: that __del__ only exists on the Python versions
+# where the quirk applies (3.12+) — on the project's required 3.10
+# (§IV.1), neither multiprocess nor stdlib multiprocessing define it at
+# all, so evaluating _ResourceTracker.__del__ as a default argument
+# raised AttributeError at import time, crashing every moulinette_eval
+# command before it could run.
 try:
     from multiprocess.resource_tracker import ResourceTracker as _ResourceTracker
 
-    def _safe_del(self, _original_del=_ResourceTracker.__del__):
-        try:
-            _original_del(self)
-        except AttributeError:
-            pass
+    if hasattr(_ResourceTracker, "__del__"):
+        def _safe_del(self, _original_del=_ResourceTracker.__del__):
+            try:
+                _original_del(self)
+            except AttributeError:
+                pass
 
-    _ResourceTracker.__del__ = _safe_del
+        _ResourceTracker.__del__ = _safe_del
 except ImportError:
     pass
 

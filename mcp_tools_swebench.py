@@ -63,10 +63,15 @@ if TASK is None:
     exit(1)
 
 
-# Root of the codebase the MCP server is allowed to explore. A writable
-# copy of /testbed (see _ensure_workspace_repo), not /testbed itself —
-# /testbed is part of the sandbox container's read-only rootfs (§V.2.3).
-ROOT_DIR = '/workspace/testbed'
+# Root of the codebase the MCP server is allowed to explore. Normally a
+# writable copy of /testbed (see _ensure_workspace_repo) — /testbed
+# itself is part of the sandbox container's read-only rootfs (§V.2.3).
+# TESTBED_PATH overrides this when the moulinette tests these tools in
+# isolation (§V.4, subject v1.2): it sets that exact env var to the repo
+# root before starting this server, without necessarily going through
+# our own docker-exec/container-discovery architecture — read here so
+# an isolated test doesn't silently look in the wrong place.
+ROOT_DIR = os.environ.get('TESTBED_PATH', '/workspace/testbed')
 
 _SANDBOX_IMAGE_PREFIX = "sandbox-executor:"
 
