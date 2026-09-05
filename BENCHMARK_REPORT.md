@@ -1,22 +1,18 @@
 # Model Benchmark Report
 
-> **WIP — no data yet.** All cells are `—` until measured from real runs.
-> Benchmark: comparing at least 5 models on the same set of at least 3 SWE-bench tasks.
-> Backing `solution.json` files must be present in the repository.
-
-## 1. Setup
+## 1. Models and 
 
 - **Models / providers compared:** (free tiers only)
   | Model | Provider |
   |---|---|
-  | nvidia/nemotron-3-ultra-550b-a55b:free | OpenRouter |
-  | minimax/minimax-m3:free | OpenRouter |
-  | poolside/laguna-s-2.1:free | OpenRouter |
-  | thinkingmachines/inkling:free | OpenRouter |
-  | inclusionai/ling-3.0-flash-fin:free | OpenRouter |
+  | huggingface/Qwen/Qwen3.8-27B | Huggingface |
+  | openrouter/nvidia/nemotron-3-ultra-550b-a55b:free | OpenRouter |
+  | openrouter/minimax/minimax-m3:free | OpenRouter |
+  | openrouter/inclusionai/ling-3.0-flash-fin:free | OpenRouter |
+  | openrouter/minimax/minimax-m2.7:free | OpenRouter |
 - **Tested on:**
   - `sympy__sympy-14711`
-  - `sympy__sympy-13480`
+  - `django__django-15104`
   - `pydata__xarray-4629`
 
 **These test were used because they vary from one to another.**
@@ -29,17 +25,17 @@ Grid: 5 models × 3 tasks (each model runs every task).
 
 | Model | Pass/Fail | Iterations | Total input tokens | Total output tokens | Wall-clock time |
 |---|---|---|---|---|---|
-| nemotron-3-ultra-550b-a55b | — | — | — | — | — |
+| Qwen/Qwen3.8-27B | True | 18 | 188 742 | 6650 | 856 |
 | minimax-m3 | — | — | — | — | — |
 | laguna-s-2.1 | — | — | — | — | — |
 | inkling | — | — | — | — | — |
 | ling-3.0-flash-fin | — | — | — | — | — |
 
-### sympy__sympy-13480
+### django__django-15104
 
 | Model | Pass/Fail | Iterations | Total input tokens | Total output tokens | Wall-clock time |
 |---|---|---|---|---|---|
-| nemotron-3-ultra-550b-a55b | — | — | — | — | — |
+| Qwen/Qwen3.8-27B | — | — | — | — | — |
 | minimax-m3 | — | — | — | — | — |
 | laguna-s-2.1 | — | — | — | — | — |
 | inkling | — | — | — | — | — |
@@ -49,7 +45,7 @@ Grid: 5 models × 3 tasks (each model runs every task).
 
 | Model | Pass/Fail | Iterations | Total input tokens | Total output tokens | Wall-clock time |
 |---|---|---|---|---|---|
-| nemotron-3-ultra-550b-a55b | — | — | — | — | — |
+| Qwen/Qwen3.8-27B | — | — | — | — | — |
 | minimax-m3 | — | — | — | — | — |
 | laguna-s-2.1 | — | — | — | — | — |
 | inkling | — | — | — | — | — |

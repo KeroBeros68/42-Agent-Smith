@@ -9,6 +9,7 @@ import time
 
 from agent_core.schemas import StepMetrics
 from litellm.router import Router
+import litellm
 from litellm.types.utils import ModelResponse
 
 
@@ -83,7 +84,7 @@ class LLM(AbstractLLM):
         self.__router = Router(
             model_list=model_list,
             routing_strategy="usage-based-routing",
-            allowed_fails=2,
+            allowed_fails=len(model_list),
             cooldown_time=5,
         )
 
@@ -122,21 +123,24 @@ class LLM(AbstractLLM):
         """
         # Query to the LLM to answer the prompt
         start_time = time.time_ns()
-        # try:
-        #     llm_gen = self.__router.completion(
-        #         model=self.__model_name,
-        #         messages=messages,
-        #         stream=False,
-        #     )
-        # except Exception as e:
-        #     raise LLMError(
-        #         f"LLM call failed for model {self.__model_name!r}: {e}"
-        #     ) from e
-        llm_gen = self.__router.completion(
-            model=self.__model_name,
-            messages=[*messages, {"role": "user", "content": "Go ahead."}],
-            stream=False,
-        )
+        retries = 0
+        llm_gen = None
+        while not llm_gen:
+            llm_gen = self.__router.completion(
+                model=self.__model_name,
+                messages=[*messages, {"role": "user", "content": "Go ahead."}],
+                stream=False,
+            )
+            # try:
+            #     llm_gen = self.__router.completion(
+            #         model=self.__model_name,
+            #         messages=[*messages, {"role": "user", "content": "Go ahead."}],
+            #         stream=False,
+            #     )
+            # except Exception as e:
+            #     raise LLMError(
+            #         f"LLM call failed for model {self.__model_name!r}: {e}"
+            #     )
         end_time = time.time_ns()
 
         # stream=False guarantees a ModelResponse at runtime, but the
@@ -166,6 +170,7 @@ class LLM(AbstractLLM):
             api_url=llm_gen._hidden_params.get("api_base") or "",
             model_name=self.__model_name,
             llm_output=llm_gen.choices[0].message.content or "",
+            retries=retries
             # sandbox_input/sandbox_output/retries are unknown at this
             # point (no code has been executed yet) and are left to their
             # StepMetrics defaults; the caller (agent_core.loop) fills
