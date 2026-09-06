@@ -241,7 +241,7 @@ def main() -> None:
         )
         with container:
             system_prompt = build_system_prompt(task, tools_doc)
-            steps, final_answer = loop.run(
+            steps, final_answer, loop_error = loop.run(
                 container,
                 mcp_bridge,
                 model_name=args.model_name,
@@ -262,6 +262,7 @@ def main() -> None:
             final_answer is not None and _last_run_tests_passed(steps)
         )
         solution.solution = final_answer or ""
+        solution.error = loop_error
     except Exception as e:
         # Broad on purpose — same rationale as agent_mbpp/__main__.py.
         solution.error = str(e)
