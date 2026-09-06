@@ -20,11 +20,14 @@ retrieving a git patch, etc.) are exposed to the agent as tools through the
 and reusable across benchmarks.
 
 The project covers two benchmarks:
-- **MBPP** — the agent writes a single Python function from a natural-language
-  description and verifies it against hidden unit tests before submitting.
-- **SWE-bench** — the agent explores a real open-source repository (e.g. Django),
-  locates and fixes a real reported bug, verifies its fix against the repository's
-  own test suite, and submits a git patch.
+- **MBPP** (*Mostly Basic Python Problems*) — a benchmark of short, self-contained
+  Python programming problems, each given as a natural-language description plus
+  a function signature. The agent writes a single Python function and verifies it
+  against hidden unit tests before submitting.
+- **SWE-bench** (*Software Engineering Benchmark*) — a benchmark built from real
+  GitHub issues on popular open-source Python projects (e.g. Django). The agent
+  explores the actual checked-out repository, locates and fixes the reported bug,
+  verifies its fix against the repository's own test suite, and submits a git patch.
 
 Every run produces a fully traceable `solution.json` (system prompt, per-step LLM
 output, sandbox input/output, token usage, timing) so its reasoning process can be
@@ -217,13 +220,13 @@ indistinguishable from a normal `max_iterations` run.
 
 ```mermaid
 sequenceDiagram
-    participant Loop as agent_core.loop (host)
+    participant AgentLoop as agent_core.loop (host)
     participant Runner as executor/runner.py (in container)
     participant Session as session.py relay (host)
     participant Bridge as mcp_bridge.py (host)
     participant Server as mcp_tools_*.py (subprocess)
 
-    Loop->>Runner: exec code (JSON Lines, stdin)
+    AgentLoop->>Runner: exec code (JSON Lines, stdin)
     Note over Runner: code runs under restrictions.py<br/>import/builtins allowlist
     Runner->>Session: tool_call message (stdout)
     Session->>Bridge: call_tool(name, args)
@@ -233,8 +236,8 @@ sequenceDiagram
     Bridge-->>Session: tool result
     Session->>Runner: tool_result message (stdin)
     Note over Runner: tool stub returns value,<br/>execution resumes
-    Runner-->>Loop: result/error message (stdout)
-    Note over Loop: fed back as the next Observation message
+    Runner-->>AgentLoop: result/error message (stdout)
+    Note over AgentLoop: fed back as the next Observation message
 ```
 
 The sandbox container never talks to the MCP server directly — every tool call
@@ -296,22 +299,200 @@ restrictions) always find *their own* session's container, never another one
 running concurrently.
 
 ## Tool Implementation Details
+
 ### MBPP Tools
+
+`mcp_tools_mbpp.py` exposes a single tool, `run_tests(code: str)` — by design,
+MBPP only needs test execution (§V.3.2). Its pipeline:
+
+1. **Syntax check** (`ast.parse`) — a `SyntaxError` returns a structured
+   `{"success": false, "output": ...}` instead of crashing the tool.
+2. **Function-name check** (`ast.walk`) — verifies the submitted code actually
+   defines a function matching the task's expected name, so a model that submits
+   e.g. a call/example instead of a function definition gets clear, actionable
+   feedback instead of a confusing downstream test failure.
+3. **Isolated execution** — `subprocess.run(..., env={})`, a fully empty
+   environment. This is a deliberate security fix, not an oversight: the parent
+   process's environment (including the active provider's API key, exported by
+   the CLI for its own use) would otherwise be inherited by a subprocess running
+   LLM-submitted code, letting a malicious submission exfiltrate the key (e.g.
+   via an exception message). Verified empirically that MBPP solutions need zero
+   environment variables to run correctly.
+4. Output is truncated (`truncate_output()`, 50k chars) before being returned,
+   bounding what accumulates into `StepMetrics`/`solution.json`.
+
 ### SWE-Bench Tools
 
+`mcp_tools_swebench.py` exposes 9 tools, in three families:
+
+- **Exploration** (read-only): `read_file`, `list_files`, `search_code`,
+  `search_function_or_class_definition_in_code`, `find_references`.
+- **Mutation**: `edit_file`.
+- **Verification & submission**: `run_tests`, `run_command`, `get_patch`.
+
+Implementation details:
+
+- All 5 path-taking tools funnel through a single `_resolve_within_root()`
+  helper, which resolves a path against `ROOT_DIR` (`/workspace/testbed`) and
+  rejects anything that escapes it — replacing what used to be 5 separately
+  duplicated guard blocks.
+- Unlike MBPP, execution happens via `container.exec_run(..., environment={...})`
+  directly against the task's own Docker image (which already contains the
+  checked-out repository and its installed dependencies), not a host subprocess.
+  `environment={...}` there always *replaces* rather than *inherits* the
+  environment, so this family was never vulnerable to the same secrets-leak
+  vector fixed on the MBPP side.
+- `run_tests()` explicitly sets `HOME=/workspace` — the image's default
+  `$HOME` (`/home/nonroot`) sits inside the container's own read-only rootfs, so
+  any test step invoking `git config --global` (a real, reproduced failure mode)
+  would otherwise fail with a read-only-filesystem error before a single test runs.
+- The task's own `pip install -e .` step (from its eval script) is rewritten via
+  regex to add `--no-build-isolation --no-deps`, since the sandbox has no network
+  access and the default PEP 517 build step tries to fetch build dependencies
+  over the network. Matched via regex rather than plain text substitution so it
+  also correctly handles the `pip install -e .[test]` extras form.
+- `get_patch()` runs `git add -A -N` (intent-to-add) before `git diff HEAD`, so
+  newly created files show up in the returned patch — without it, only edits to
+  already-tracked files were captured.
+- Container discovery (`run_command`/`run_tests`, which use `docker exec`) is
+  scoped by the `agent-smith.owner-pid` label rather than an image-name search,
+  so concurrent sandbox sessions never cross-target each other's container.
+
 ## Instructions
+
 ### Prerequisites
+
+- Python 3.10 (the project pins `requires-python = "==3.10.*"`).
+- [`uv`](https://github.com/astral-sh/uv) — used for all dependency management
+  and running commands (`uv sync`, `uv run ...`); no manual virtualenv needed.
+- Docker, running and reachable by the current user — both the sandbox
+  container and SWE-bench's task containers are real Docker containers, not
+  simulated.
+- At least one LLM provider API key (DeepSeek and/or OpenRouter are the two
+  providers exercised by this project — see Configuration below).
+
 ### Installation
+
+```bash
+make install        # uv sync — installs student/ (root) dependencies
+cd moulinette && uv sync && cd ..   # moulinette's own separate environment
+```
+
+The two `uv` projects are independent on purpose: `moulinette` is the
+evaluation/task-generation tool (provided, not part of the agent itself), while
+the root project is the agent implementation.
+
 ### Configuration (API Keys / .env)
+
+Copy `.env.example` to `.env` and fill in the keys for the provider(s) you plan
+to use:
+
+```
+DEEPSEEK_API_KEY=sk-...
+OPENROUTER_API_KEY=sk-or-...
+```
+
+Multiple comma-separated keys for the same provider are rotated automatically
+(see LLM Providers & Multi-Key Rotation above). The `MBPP_TASK_JSON`,
+`SWE_TASK_JSON`, `MCP_TRANSPORT`, and `MCP_TIMEOUT_DELAY` entries in
+`.env.example` are for reference only — they are set programmatically by
+`agent_mbpp`/`agent_swebench`/`sandbox` at runtime, not meant to be filled in
+by hand.
+
 ### Running the Agent (MBPP / SWE-Bench)
+
+Generate a task, then run the agent against it, via the provided `Makefile`:
+
+```bash
+# Generate one task (random, or a specific one with TASK_ID)
+make task BENCH=mbpp
+make task BENCH=swebench TASK_ID=django__django-11066
+
+# Run the agent on it
+make run BENCH=mbpp MODEL=deepseek/deepseek-v4-flash
+make run BENCH=swebench MODEL=openrouter/minimax/minimax-m2.7:free \
+    PROVIDER_URL=https://openrouter.ai/api/v1
+
+# Or generate/run several tasks at once
+make tasks BENCH=swebench N=5
+make runs  BENCH=swebench N=5 MODEL=deepseek/deepseek-v4-flash
+```
+
+Output is written to `cache/<bench>_solution.json` (or `_solution_<i>.json`
+for the batch form) — see Data Contract above for its schema.
+
 ### Interactive Sandbox REPL
+
+To explore or debug the sandbox directly, without a benchmark task or an LLM in
+the loop:
+
+```bash
+cd student && uv run sandbox                                     # plain REPL
+uv run sandbox --mcp-stdio "python ../mcp_tools_mbpp.py"          # with MBPP tools
+uv run sandbox --mcp-server http://localhost:8000                # HTTP transport
+```
+
+This drops into an interactive prompt where Python code can be typed and run
+directly inside the same restricted container the agent itself uses.
+
 ### Makefile Targets
 
+| Target | Purpose |
+|---|---|
+| `make install` | `uv sync` — install dependencies |
+| `make lint` | `flake8` + `mypy` (relaxed flags) |
+| `make lint-strict` | `flake8` + `mypy --strict` |
+| `make task BENCH=... [TASK_ID=...]` | Generate one task file |
+| `make tasks BENCH=... N=...` | Generate N task files |
+| `make run BENCH=... MODEL=... [PROVIDER_URL=...]` | Run the agent on one task |
+| `make runs BENCH=... N=... MODEL=...` | Run the agent on N tasks |
+
 ## Benchmark Results and Analysis
+
 ### Summary
+
+Full benchmark results (≥5 models across ≥2 providers, MBPP and SWE-bench) are
+tracked separately in [`BENCHMARK_REPORT.md`](BENCHMARK_REPORT.md), per §V.7 of
+the subject.
+
 ### Key Findings
+
+See `BENCHMARK_REPORT.md`'s own Conclusions section.
+
 ### Full Report
 
+→ [`BENCHMARK_REPORT.md`](BENCHMARK_REPORT.md)
+
 ## Resources
+
 ### References
+
+- [Stéphane Robert — Blog](https://blog.stephane-robert.info/) — Docker/Linux/DevOps
+  reference articles used while designing the sandbox's container isolation.
+- [Docker documentation](https://docs.docker.com/) — `network_mode`, `read_only`,
+  `tmpfs`, `cap_drop`, container labels.
+- [Model Context Protocol (MCP) specification](https://modelcontextprotocol.io/) —
+  tools/resources/prompts, transports (stdio, streamable HTTP).
+- [FastMCP documentation](https://gofastmcp.com/) — the MCP server framework used
+  by `mcp_tools_mbpp.py`/`mcp_tools_swebench.py`.
+- [litellm documentation](https://docs.litellm.ai/) — the `Router` abstraction
+  behind multi-provider/multi-key LLM calls.
+- [Pydantic documentation](https://docs.pydantic.dev/) — data contract validation
+  (`StepMetrics`, `SolutionOutput`, `SandboxConfig`).
+- [MBPP dataset paper](https://arxiv.org/abs/2108.07732) — *Program Synthesis
+  with Large Language Models* (Austin et al., 2021).
+- [SWE-bench dataset paper](https://arxiv.org/abs/2310.06770) — *SWE-bench: Can
+  Language Models Resolve Real-World GitHub Issues?* (Jimenez et al., 2023).
+
 ### AI Usage Disclosure
+
+Claude Code (Anthropic) was used throughout this project's implementation,
+debugging, and documentation — including this README. Every change was
+developed interactively: code was proposed and reviewed before being applied,
+and every fix (bug, security issue, or behavioral change) was verified against
+real conditions — real Docker containers, real LLM API calls, real linter/type
+checker output — rather than accepted on the model's own claim that it worked.
+Design decisions, tradeoffs, and known limitations (e.g. the sandbox's
+introspection-based import bypass, see Sandbox Design above) were discussed and
+recorded deliberately rather than left implicit. All final engineering
+decisions, and responsibility for the resulting code, remain with the authors.
