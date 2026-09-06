@@ -1,9 +1,11 @@
 """Extract LLM-generated Python code from a model response (§V.1.2).
 
 Formats (a), (b), (c), and (d) of the subject, plus a DeepSeek-specific
-DSML "python block" dialect found empirically (see extract_code()).
+DSML "python block" dialect and a Liquid-specific "tool_call_start" dialect
+found empirically (see extract_code()).
 """
 
+import ast
 import json
 import re
 
@@ -18,6 +20,10 @@ _UNCLOSED_FENCE_WARNING = (
 
 _DSML_PYTHON_RE = re.compile(
     r'<[^>]*\bpython\b[^>]*>(.*?)</[^>]+>',
+    re.DOTALL,
+)
+_LIQUID_TOOL_CALL_RE = re.compile(
+    r'<\|tool_call_start\|>\s*(.*?)\s*<\|tool_call_end\|>',
     re.DOTALL,
 )
 _TOOL_CALL_RE = re.compile(
@@ -52,12 +58,14 @@ def extract_code(llm_output: str) -> tuple[str | None, str | None]:
     Tries the primary format (a) first (fenced ```python block), then
     its malformed/unclosed variant, then a DeepSeek-specific native
     "python block" tag (own dialect, distinct from — and found later
-    than — its (b) invoke/parameter dialect below), then falls back in
-    order to formats (b) XML tool calls, (c) JSON/Hermes tool calls, (d)
-    ReAct — some models default to their own trained tool-calling syntax
-    instead of the fenced-block pattern demonstrated in the system
-    prompt's worked example (found empirically for format (b), and
-    later this DSML-python variant, both with DeepSeek).
+    than — its (b) invoke/parameter dialect below), then a
+    Liquid-specific `<|tool_call_start|>[...]<|tool_call_end|>` dialect,
+    then falls back in order to formats (b) XML tool calls, (c)
+    JSON/Hermes tool calls, (d) ReAct — some models default to their own
+    trained tool-calling syntax instead of the fenced-block pattern
+    demonstrated in the system prompt's worked example (found
+    empirically for format (b), then the DSML-python variant with
+    DeepSeek, then this Liquid variant with liquid/lfm-2.5-2.6b:free).
     """
     match = _CODE_BLOCK_RE.search(llm_output)
     if match is not None:
@@ -70,6 +78,10 @@ def extract_code(llm_output: str) -> tuple[str | None, str | None]:
     match = _DSML_PYTHON_RE.search(llm_output)
     if match is not None:
         return match.group(1).strip(), None
+
+    code = _extract_liquid_tool_calls(llm_output)
+    if code is not None:
+        return code, None
 
     code = _extract_xml_tool_calls(llm_output)
     if code is not None:
@@ -95,6 +107,31 @@ def _extract_unclosed_code_block(llm_output: str) -> str | None:
         return None
     body = match.group(1).strip()
     return body if body else None
+
+
+def _extract_liquid_tool_calls(llm_output: str) -> str | None:
+    """Convert Liquid's own `<|tool_call_start|>[call(...)]<|tool_call_end|>`
+    dialect (found empirically with liquid/lfm-2.5-2.6b:free) to
+    equivalent Python code. Unlike formats (b)/(c)/(d), the content is
+    already valid Python call syntax (a list of calls, or a bare call),
+    so this parses it with ast instead of a bespoke regex/JSON grammar —
+    ast.unparse()
+    regenerates each call's exact source, one print(call) per call, in order.
+    """
+    match = _LIQUID_TOOL_CALL_RE.search(llm_output)
+    if match is None:
+        return None
+    try:
+        tree = ast.parse(match.group(1), mode="eval")
+    except SyntaxError:
+        return None
+    calls = tree.body.elts if isinstance(tree.body, ast.List) else [tree.body]
+    lines = []
+    for call in calls:
+        if not isinstance(call, ast.Call):
+            continue
+        lines.append(f"print({ast.unparse(call)})")
+    return "\n".join(lines) if lines else None
 
 
 def _python_literal(value: str) -> str:

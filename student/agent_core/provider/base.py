@@ -10,6 +10,7 @@ import time
 from agent_core.schemas import StepMetrics
 from litellm.router import Router
 from litellm.types.utils import ModelResponse
+from litellm.utils import CustomStreamWrapper
 
 
 class LLMError(Exception):
@@ -87,6 +88,26 @@ class LLM(AbstractLLM):
             cooldown_time=5,
         )
 
+        # One id per key, captured once here. get_response() dispatches
+        # retries directly by id (Router.has_model_id() short-circuits
+        # straight to that exact deployment, bypassing cooldown/health/
+        # usage-based selection entirely) instead of letting the Router
+        # auto-pick a deployment on each retry — verified empirically
+        # that auto-picking can retry an already-failed key more than
+        # once before its cooldown is actually in effect (a race between
+        # the failure callback and the very next call), sometimes never
+        # reaching a working key within the retry budget. Dispatching by
+        # id can't repeat a key already tried within the same call.
+        self.__deployment_ids = [
+            d["model_info"]["id"] for d in self.__router.model_list
+        ]
+        # Rotates which key each *new* get_response() call starts on, so
+        # successful calls still spread load across the pool round-robin
+        # instead of always hammering the same first key (dispatching by
+        # id has no usage-based balancing of its own, unlike the auto-pick
+        # this replaces).
+        self.__next_deployment_index = 0
+
         return None
 
     def _get_keys_for_provider(self, provider: str) -> list[str]:
@@ -115,6 +136,11 @@ class LLM(AbstractLLM):
     def get_response(self, step: int, messages: list[dict]) -> StepMetrics:
         """Return the response from the LLM as a StepMetrics object.
 
+        Tries each configured key once, in a round-robin order that
+        starts on a different key each call (see _setup_router), before
+        raising LLMError — a failing key can never be retried twice in
+        the same call while another, untried key sits skipped.
+
         Args:
             step (int): Current step
             messages (list[dict]): Full conversation so far, OpenAI-style
@@ -122,16 +148,29 @@ class LLM(AbstractLLM):
         """
         # Query to the LLM to answer the prompt
         start_time = time.time_ns()
-        try:
-            llm_gen = self.__router.completion(
-                model=self.__model_name,
-                messages=messages,
-                stream=False,
-            )
-        except Exception as e:
+        start = self.__next_deployment_index
+        n = len(self.__deployment_ids)
+        self.__next_deployment_index = (start + 1) % n
+        order = self.__deployment_ids[start:] + self.__deployment_ids[:start]
+
+        last_error: Exception | None = None
+        llm_gen: ModelResponse | CustomStreamWrapper | None = None
+        for deployment_id in order:
+            try:
+                llm_gen = self.__router.completion(
+                    model=deployment_id,
+                    messages=messages,
+                    stream=False,
+                )
+                break
+            except Exception as e:
+                last_error = e
+        if llm_gen is None:
             raise LLMError(
-                f"LLM call failed for model {self.__model_name!r}: {e}"
-            ) from e
+                f"LLM call failed for model {self.__model_name!r} after "
+                f"{n} attempt(s) across {len(self.__api_keys)} key(s): "
+                f"{last_error}"
+            ) from last_error
         end_time = time.time_ns()
 
         # stream=False guarantees a ModelResponse at runtime, but the
