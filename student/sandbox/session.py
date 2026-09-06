@@ -11,6 +11,7 @@ from pathlib import Path
 
 from sandbox.config import SandboxConfig
 from sandbox.container import SandboxContainer
+from sandbox.executor.protocol import MsgType
 from sandbox.mcp_bridge import MCPBridge
 
 
@@ -23,8 +24,16 @@ def build_container(
     tools: dict[str, list[str]] = {}
     if mcp_bridge is not None:
         for tool in mcp_bridge.list_tools():
-            properties = (tool.inputSchema or {}).get("properties", {})
-            tools[tool.name] = list(properties.keys())
+            schema = tool.inputSchema or {}
+            if "properties" not in schema:
+                raise ValueError(
+                    f"MCP tool {tool.name!r} has no 'properties' in its "
+                    f"inputSchema (object schema expected) — positional "
+                    f"arguments to this tool would silently be dropped by "
+                    f"runner.py's call stub (zip(param_names, args) with "
+                    f"an empty param_names list)."
+                )
+            tools[tool.name] = list(schema["properties"].keys())
     return SandboxContainer(
         config,
         image=image,
@@ -44,13 +53,13 @@ def relay_tool_calls(
     """
     while True:
         response = container.receive()
-        if response.get("type") != "tool_call":
+        if response.get("type") != MsgType.TOOL_CALL:
             return response
 
         if mcp_bridge is None:
             container.send(
                 {
-                    "type": "tool_result",
+                    "type": MsgType.TOOL_RESULT,
                     "result": "error: no MCP server connected",
                 }
             )
@@ -62,4 +71,4 @@ def relay_tool_calls(
             )
         except Exception as e:
             result = f"error calling tool: {e}"
-        container.send({"type": "tool_result", "result": str(result)})
+        container.send({"type": MsgType.TOOL_RESULT, "result": str(result)})

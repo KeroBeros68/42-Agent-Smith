@@ -8,15 +8,28 @@ Thought/Code/Observation instructions and worked examples (§V.1 point 6)
 are a separate, larger system prompt assembled elsewhere.
 """
 
+from enum import Enum
 from typing import Any
 
+
+class JsonSchemaType(str, Enum):
+    """The JSON Schema primitive type names FastMCP tool schemas use."""
+
+    STRING = "string"
+    INTEGER = "integer"
+    NUMBER = "number"
+    BOOLEAN = "boolean"
+    ARRAY = "array"
+    OBJECT = "object"
+
+
 _EXAMPLE_VALUES: dict[str, str] = {
-    "string": '"..."',
-    "integer": "0",
-    "number": "0",
-    "boolean": "True",
-    "array": "[]",
-    "object": "{}",
+    JsonSchemaType.STRING: '"..."',
+    JsonSchemaType.INTEGER: "0",
+    JsonSchemaType.NUMBER: "0",
+    JsonSchemaType.BOOLEAN: "True",
+    JsonSchemaType.ARRAY: "[]",
+    JsonSchemaType.OBJECT: "{}",
 }
 
 

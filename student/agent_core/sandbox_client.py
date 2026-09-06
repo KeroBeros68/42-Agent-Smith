@@ -4,6 +4,7 @@ Transport-agnostic (stdio or HTTP), benchmark-agnostic.
 """
 
 from sandbox.container import SandboxContainer
+from sandbox.executor.protocol import MsgType
 from sandbox.mcp_bridge import MCPBridge
 from sandbox.session import relay_tool_calls
 
@@ -20,11 +21,11 @@ def run_code(
     (loop.py), which is the only piece that knows the surrounding step.
     """
     try:
-        container.send({"type": "exec", "code": code})
+        container.send({"type": MsgType.EXEC, "code": code})
         return relay_tool_calls(container, mcp_bridge)
     except (ConnectionError, TimeoutError) as e:
         return {
-            "type": "error",
+            "type": MsgType.ERROR,
             "error_type": type(e).__name__,
             "message": str(e),
             "traceback": "",

@@ -12,7 +12,7 @@ from agent_core.sandbox_client import run_code
 from agent_core.schemas import StepMetrics
 from mcp_server_shared.share import truncate_output
 from sandbox.container import SandboxContainer
-from sandbox.executor.protocol import response_text
+from sandbox.executor.protocol import MsgType, response_text
 from sandbox.mcp_bridge import MCPBridge
 
 _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -117,7 +117,7 @@ def run(
         metrics.sandbox_output = observation
         messages.append({"role": "user", "content": observation})
 
-        if response.get("type") == "final_answer":
+        if response.get("type") == MsgType.FINAL_ANSWER:
             final_answer = response.get("answer", "")
             _announce(step, "Done")
             break

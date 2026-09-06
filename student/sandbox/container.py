@@ -19,13 +19,24 @@ import json
 import os
 import tarfile
 from pathlib import Path
+from types import TracebackType
 from typing import Any, cast
 
 import docker
 from docker.errors import ImageNotFound
 from docker.models.containers import Container
 
+from mcp_server_shared.share import (
+    DERIVED_IMAGE_PREFIX,
+    OWNER_PID_LABEL,
+    SANDBOX_GID,
+    SANDBOX_UID,
+)
 from sandbox.config import SandboxConfig
+from sandbox.executor.protocol import (
+    ENV_MCP_TOOLS_JSON,
+    ENV_SANDBOX_CONFIG_JSON,
+)
 
 EXECUTOR_CONTAINER_PATH = "/sandbox_executor"
 EXECUTOR_CONTEXT_SUBDIR = "executor"
@@ -60,7 +71,10 @@ RECEIVE_TIMEOUT_MARGIN_SECONDS = 30
 # was defense-in-depth on top of that, not the only barrier — and it
 # never applied to MCP tools' own `docker exec` calls (a separate
 # security domain, §V.2.5) anyway.
-TMPFS_OPTIONS = "rw,exec,nosuid,nodev,size=4096m,uid=1000,gid=1000,mode=0700"
+TMPFS_OPTIONS = (
+    f"rw,exec,nosuid,nodev,size=4096m,uid={SANDBOX_UID},"
+    f"gid={SANDBOX_GID},mode=0700"
+)
 TMPFS_MOUNTS = {
     "/workspace": TMPFS_OPTIONS,
     "/tmp": TMPFS_OPTIONS,
@@ -146,7 +160,7 @@ class SandboxContainer:
         # is a plain `docker build`, unrelated to any runtime read-only
         # constraint. --chown pins ownership to the sandbox user (uid 1000)
         # instead of the host uid tar.add() used to preserve.
-        tag = "sandbox-executor:" + hashlib.sha256(
+        tag = DERIVED_IMAGE_PREFIX + hashlib.sha256(
             base_image.encode("utf-8")
         ).hexdigest()[:16]
         dockerfile = (
@@ -177,8 +191,8 @@ class SandboxContainer:
             tmpfs=TMPFS_MOUNTS,
             pids_limit=self._config.pids_limit,
             environment={
-                "SANDBOX_CONFIG_JSON": self._config.model_dump_json(),
-                "MCP_TOOLS_JSON": json.dumps(self._tools),
+                ENV_SANDBOX_CONFIG_JSON: self._config.model_dump_json(),
+                ENV_MCP_TOOLS_JSON: json.dumps(self._tools),
             },
             # Lets mcp_tools_swebench.py's _find_sandbox_container()
             # target the container that belongs to *this* CLI process,
@@ -187,7 +201,7 @@ class SandboxContainer:
             # container) with two sessions running at once, since
             # MCPBridge only knows this PID, not a container ID (the
             # container doesn't exist yet when it connects).
-            labels={"agent-smith.owner-pid": str(os.getpid())},
+            labels={OWNER_PID_LABEL: str(os.getpid())},
         )
         container.start()
         self._container = container
@@ -230,7 +244,7 @@ class SandboxContainer:
             else:
                 self._stderr_buffer += payload
         line, self._recv_buffer = self._recv_buffer.split(b"\n", 1)
-        return json.loads(line.decode("utf-8"))
+        return cast(dict[str, Any], json.loads(line.decode("utf-8")))
 
     def stop(self) -> None:
         if self._container is None:
@@ -258,5 +272,10 @@ class SandboxContainer:
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         self.stop()

@@ -23,7 +23,13 @@ from typing import Literal
 from fastmcp import FastMCP
 from pydantic import ValidationError
 
-from student.mcp_server_shared.share import truncate_output
+from student.mcp_server_shared.share import (
+    ENV_MBPP_TASK_JSON,
+    ENV_MCP_TIMEOUT_DELAY,
+    ENV_MCP_TRANSPORT,
+    TransportMode,
+    truncate_output,
+)
 from student.agent_mbpp.task import MBPPTaskInput
 
 
@@ -39,7 +45,7 @@ mcp = FastMCP("MBPP MCP Server")
 # starting the MCP Server.
 try:
     TASK = MBPPTaskInput.model_validate(
-        json.loads(os.environ.get("MBPP_TASK_JSON", "null")) or {}
+        json.loads(os.environ.get(ENV_MBPP_TASK_JSON, "null")) or {}
     )
 
 except (ValidationError, json.JSONDecodeError):
@@ -49,7 +55,7 @@ if TASK is None:
     print(
         "Could not load the task. Please restart "
         "the MCP server with a valid MBPPTaskInput in the "
-        "MBPP_TASK_JSON env variable.",
+        f"{ENV_MBPP_TASK_JSON} env variable.",
         file=sys.stderr,
     )
     exit(1)
@@ -57,13 +63,13 @@ if TASK is None:
 
 # Load the timeout delay
 try:
-    TIMEOUT_DELAY_SEC = int(os.environ.get('MCP_TIMEOUT_DELAY', -1))
+    TIMEOUT_DELAY_SEC = int(os.environ.get(ENV_MCP_TIMEOUT_DELAY, -1))
     if TIMEOUT_DELAY_SEC < 1:
         raise ValueError('Invalid timeout delay')
 except ValueError:
-    print('Unable to load the env variable corresponding '
-          'to MCP_TIMEOUT_DELAY. Make sure it\'s present as '
-          'a positive int value (>=1).')
+    print(f'Unable to load the env variable corresponding '
+          f'to {ENV_MCP_TIMEOUT_DELAY}. Make sure it\'s present as '
+          f'a positive int value (>=1).')
     exit(1)
 
 # --- MCP Tools ---
@@ -217,19 +223,23 @@ def solve_mbpp_task() -> str:
 
 if __name__ == "__main__":
     # Get transport mode from env variable MCP_TRANSPORT
-    transport_mode = os.environ.get("MCP_TRANSPORT", "stdio")
+    transport_mode = os.environ.get(
+        ENV_MCP_TRANSPORT, TransportMode.STDIO.value
+    )
 
     # Verify transport mode
-    if transport_mode != "http" and transport_mode != "stdio":
+    if transport_mode not in (
+        TransportMode.HTTP.value, TransportMode.STDIO.value
+    ):
         raise TypeError(
             f'Wrong transport mode ("{transport_mode}") '
-            'provided in the env variable "MCP_TRANSPORT".'
+            f'provided in the env variable "{ENV_MCP_TRANSPORT}".'
         )
 
     # Use literal value for mypy
-    mode: Literal["http", "stdio"] = "http"
-    if transport_mode == 'stdio':
-        mode = 'stdio'
+    mode: Literal["http", "stdio"] = TransportMode.HTTP.value
+    if transport_mode == TransportMode.STDIO.value:
+        mode = TransportMode.STDIO.value
 
     # Listen
     mcp.run(transport=mode, show_banner=False)

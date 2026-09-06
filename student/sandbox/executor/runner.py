@@ -15,17 +15,19 @@ import os
 import sys
 import traceback
 from contextlib import redirect_stdout
-from typing import TypeAlias
+from typing import Any, Callable, TypeAlias
 
 import protocol
 import restrictions
 import watchdog
 
-SANDBOX_CONFIG = json.loads(os.environ.get("SANDBOX_CONFIG_JSON", "{}"))
+SANDBOX_CONFIG = json.loads(
+    os.environ.get(protocol.ENV_SANDBOX_CONFIG_JSON, "{}")
+)
 MAX_EXECUTION_TIME_SECONDS = SANDBOX_CONFIG.get(
     "max_execution_time_seconds", 10
 )
-TOOLS = json.loads(os.environ.get("MCP_TOOLS_JSON", "{}"))
+TOOLS = json.loads(os.environ.get(protocol.ENV_MCP_TOOLS_JSON, "{}"))
 
 # _handle_exec wraps user code in redirect_stdout(buffer) to capture print()
 # output. A tool stub's own protocol message must bypass that and reach the
@@ -46,12 +48,12 @@ def final_answer(answer: str) -> None:
     raise _FinalAnswerSignal(answer)
 
 
-def _make_tool_stub(name: str, param_names: list):
+def _make_tool_stub(name: str, param_names: list[str]) -> Callable[..., Any]:
     # Called from deep inside exec(), while main()'s own stdin loop is
     # paused mid-iteration — the stub does its own send/wait directly on
     # stdout/stdin rather than going through main(), since main() cannot
     # run again until this call returns.
-    def stub(*args, **kwargs):
+    def stub(*args: Any, **kwargs: Any) -> Any:
         # param_names comes from the tool's inputSchema (dict preserves
         # declaration order), so positional call-site args map back to
         # the keyword arguments the real MCP tool actually expects.
@@ -59,7 +61,7 @@ def _make_tool_stub(name: str, param_names: list):
         REAL_STDOUT.write(
             json.dumps(
                 protocol.ToolCallMessage(
-                    type=protocol.MSG_TOOL_CALL,
+                    type=protocol.MsgType.TOOL_CALL,
                     name=name,
                     arguments=kwargs,
                 )
@@ -72,7 +74,7 @@ def _make_tool_stub(name: str, param_names: list):
             response = json.loads(sys.stdin.readline())
         finally:
             watchdog.resume(remaining)
-        if response.get("type") == protocol.MSG_TOOL_RESULT:
+        if response.get("type") == protocol.MsgType.TOOL_RESULT:
             return response["result"]
         raise RuntimeError(f"Unexpected response to tool_call: {response}")
 
@@ -96,18 +98,18 @@ def _handle_exec(message: protocol.ExecMessage) -> ExecResponse:
             exec(code_obj, NAMESPACE)
     except _FinalAnswerSignal as e:
         return protocol.FinalAnswerMessage(
-            type=protocol.MSG_FINAL_ANSWER,
+            type=protocol.MsgType.FINAL_ANSWER,
             answer=e.answer,
         )
     except Exception as e:
         return protocol.ErrorMessage(
-            type=protocol.MSG_ERROR,
+            type=protocol.MsgType.ERROR,
             error_type=type(e).__name__,
             message=str(e),
             traceback=traceback.format_exc(),
         )
     return protocol.ResultMessage(
-        type=protocol.MSG_RESULT,
+        type=protocol.MsgType.RESULT,
         stdout=buffer.getvalue(),
     )
 
@@ -129,18 +131,18 @@ def main() -> None:
             message = json.loads(line)
         except json.JSONDecodeError as e:
             response = protocol.ErrorMessage(
-                type=protocol.MSG_ERROR,
+                type=protocol.MsgType.ERROR,
                 error_type="ProtocolError",
                 message=f"Malformed JSON message: {e}",
                 traceback="",
             )
         else:
             msg_type = message.get("type")
-            if msg_type == protocol.MSG_EXEC:
+            if msg_type == protocol.MsgType.EXEC:
                 response = _handle_exec(message)
             else:
                 response = protocol.ErrorMessage(
-                    type=protocol.MSG_ERROR,
+                    type=protocol.MsgType.ERROR,
                     error_type="ProtocolError",
                     message=f"Unknown message type: {msg_type!r}",
                     traceback="",

@@ -10,6 +10,8 @@ import importlib
 import importlib.abc
 import os as _os
 import sys
+from importlib.machinery import ModuleSpec
+from types import ModuleType
 from typing import Any, Sequence
 
 # Verified empirically (2026-08-18): 'os' is already present in sys.modules
@@ -33,7 +35,12 @@ class RestrictedImportFinder(importlib.abc.MetaPathFinder):
     def __init__(self, authorized_imports: Sequence[str]) -> None:
         self._authorized = authorized_imports
 
-    def find_spec(self, fullname, path, target=None):
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None,
+        target: ModuleType | None = None,
+    ) -> ModuleSpec | None:
         if _is_authorized(fullname, self._authorized):
             return None
         raise ImportError(

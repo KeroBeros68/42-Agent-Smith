@@ -20,8 +20,13 @@ import time
 from pathlib import Path
 
 from agent_core import loop, manual, shutdown
-from agent_core.schemas import SolutionOutput, StepMetrics
+from agent_core.schemas import (
+    RUN_TESTS_CALL_PROBE,
+    SolutionOutput,
+    StepMetrics,
+)
 from agent_swebench.task import SWEBenchTaskInput
+from mcp_server_shared.share import ENV_SWE_TASK_JSON
 from pydantic import ValidationError
 from sandbox import session
 from sandbox.config import SandboxConfig
@@ -179,7 +184,7 @@ def _last_run_tests_passed(steps: list[StepMetrics]) -> bool:
     install packages...", which isn't a test result at all.
     """
     for s in reversed(steps):
-        if s.sandbox_input and "run_tests(" in s.sandbox_input:
+        if s.sandbox_input and RUN_TESTS_CALL_PROBE in s.sandbox_input:
             out = s.sandbox_output or ""
             if "FAILED" in out or _PYTEST_FAILED_RE.search(out):
                 return False
@@ -210,7 +215,7 @@ def main() -> None:
     # mcp_tools_swebench.py reads this env var at import time (it spawns
     # as a subprocess of MCPBridge, so it must be set before instantiating
     # it).
-    os.environ["SWE_TASK_JSON"] = task.model_dump_json()
+    os.environ[ENV_SWE_TASK_JSON] = task.model_dump_json()
 
     solution = SolutionOutput(
         task_id=task.instance_id,
@@ -271,6 +276,11 @@ def main() -> None:
     finally:
         mcp_bridge.close()
         solution.total_time_seconds = time.time() - start_time
+        if solution.success and not solution.system_prompt:
+            solution.success = False
+            solution.error = (
+                "internal error: system_prompt missing despite success"
+            )
         write_output(Path(args.output), solution)
 
     sys.exit(0 if solution.success else 1)

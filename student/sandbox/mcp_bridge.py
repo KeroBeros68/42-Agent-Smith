@@ -10,10 +10,17 @@ import asyncio
 import os
 import shlex
 import threading
-from typing import Any
+from types import TracebackType
+from typing import Any, cast
 
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
+from mcp_server_shared.share import (
+    ENV_MCP_TIMEOUT_DELAY,
+    ENV_MCP_TRANSPORT,
+    ENV_SANDBOX_OWNER_PID,
+    TransportMode,
+)
 
 
 class MCPBridge:
@@ -56,13 +63,13 @@ class MCPBridge:
                 command=command,
                 args=args,
                 env={**os.environ,
-                     "MCP_TRANSPORT": "stdio",
-                     "MCP_TIMEOUT_DELAY": str(mcp_timeout_delay_sec),
+                     ENV_MCP_TRANSPORT: TransportMode.STDIO.value,
+                     ENV_MCP_TIMEOUT_DELAY: str(mcp_timeout_delay_sec),
                      # Same PID that session.build_container() will later
                      # label the container with — lets a SWE-bench server
                      # find its own container even with another sandbox
                      # session running concurrently (see container.py).
-                     "SANDBOX_OWNER_PID": str(os.getpid())},
+                     ENV_SANDBOX_OWNER_PID: str(os.getpid())},
             )
         if server_url is not None:
             return server_url
@@ -91,7 +98,7 @@ class MCPBridge:
         return self._client.is_connected()
 
     def list_tools(self) -> list[Any]:
-        return self._run(self._client.list_tools())
+        return cast(list[Any], self._run(self._client.list_tools()))
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         # Distinguish a legitimate tool-side error (e.g. the tool's own
@@ -118,5 +125,10 @@ class MCPBridge:
         self.connect()
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         self.close()

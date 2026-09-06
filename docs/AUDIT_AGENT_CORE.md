@@ -99,7 +99,8 @@ Aucun point ouvert.
 
 1. **Seul le cas de la fence non fermée est couvert pour "bloc malformé mais interprété quand même"** — `<invoke>`/`<parameter>` sans `name=`, `<tool_call>` JSON malformé (silencieusement ignoré, pas de warning), ou une fence sans le tag `python` ne déclenchent aucun warning explicatif ; pas de cas réel rencontré à ce jour (contrôlé sur les 15 vraies réponses du dernier run réussi — aucune fence mal formée), donc non prioritaire tant qu'aucun cas concret ne se présente.
 2. **`re.search`/`findall` ne gèrent pas un mélange de formats dans une même réponse** — si un modèle produisait à la fois un bloc `` ```python ``` `` et des tags `<invoke>` dans le même message, seul le premier détecté (format (a), prioritaire) serait utilisé ; cas non rencontré à ce jour, mais non testé.
-Aucun point ouvert — les points 1 et 2 (warnings manquants sur d'autres cas malformés, mélange de formats dans une même réponse) restent volontairement non traités : aucun cas réel rencontré, non prioritaires tant qu'aucun ne se présente. Le point 3 (typage par heuristique de forme plutôt que par le schéma réel du tool) a été corrigé le 2026-09-06, voir « Corrigés ».
+
+Les points 1 et 2 restent volontairement non traités : aucun cas réel rencontré, non prioritaires tant qu'aucun ne se présente. Un ancien point 3 (typage par heuristique de forme plutôt que par le schéma réel du tool) a été corrigé le 2026-09-06, voir « Corrigés » — retiré de cette liste.
 
 ---
 
@@ -188,6 +189,4 @@ Aucun point ouvert.
 
 ## Priorités recommandées
 
-Par ordre d'impact :
-
-1. ~~**Renforcer le prompt pour soumettre dès que `run_tests()` confirme le succès**~~ **Fait** — l'instruction explicite existe désormais dans `agent_swebench/__main__.py` et a été confirmée par plusieurs runs réels ultérieurs enchaînant `run_tests() → OK` puis `get_patch()`+`final_answer()` sans détour (voir Corrigés, entrées `agent_swebench/__main__.py` du 2026-08-27/28).
+Aucune priorité ouverte au 2026-09-06 — voir « Corrigés » pour l'historique complet (renforcement du prompt `run_tests()`→`final_answer()`, `LLMError` non-avalée, rotation multi-clés, formats DSML/Liquid, typage par schéma, dédup `_format_observation`, garde `manual.py`, troncature générique, entre autres).

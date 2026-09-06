@@ -19,6 +19,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+# Both benchmarks' MCP servers name their test-verification tool
+# `run_tests` — used by each __main__.py's own `_last_run_tests_passed()`
+# to spot the last such call in a step's sandbox_input.
+RUN_TESTS_CALL_PROBE = "run_tests("
+
 
 class TaskInput(BaseModel):
     """Marker base class for benchmark task inputs.

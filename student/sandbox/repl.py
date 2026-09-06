@@ -8,7 +8,7 @@ container.py, prints the result/error, exits cleanly on `exit` or EOF
 import codeop
 
 from sandbox.container import SandboxContainer
-from sandbox.executor.protocol import response_text
+from sandbox.executor.protocol import MsgType, response_text
 from sandbox.mcp_bridge import MCPBridge
 from sandbox.session import relay_tool_calls
 
@@ -49,9 +49,9 @@ def _format_response(response: dict) -> str:
     """
     msg_type = response.get("type")
     text = response_text(response)
-    if msg_type == "final_answer":
+    if msg_type == MsgType.FINAL_ANSWER:
         return f"final_answer: {text}\n"
-    if msg_type == "result":
+    if msg_type == MsgType.RESULT:
         return text
     return f"{text}\n"
 
@@ -69,7 +69,7 @@ def run(
             continue
 
         try:
-            container.send({"type": "exec", "code": source})
+            container.send({"type": MsgType.EXEC, "code": source})
             response = relay_tool_calls(container, mcp_bridge)
             print(_format_response(response), end="")
         except (ConnectionError, TimeoutError):

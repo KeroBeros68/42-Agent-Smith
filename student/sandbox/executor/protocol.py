@@ -7,49 +7,67 @@ result, error — covering the explicit feedback cases required by §V.1.3
 error after an edit).
 """
 
+from enum import Enum
 from typing import Any, TypedDict
 
-# host -> container
-MSG_EXEC = "exec"
-MSG_TOOL_RESULT = "tool_result"
 
-# container -> host
-MSG_RESULT = "result"
-MSG_ERROR = "error"
-MSG_TOOL_CALL = "tool_call"
-MSG_FINAL_ANSWER = "final_answer"
+class MsgType(str, Enum):
+    """Message type tags for the JSON Lines protocol (host <-> container).
+
+    A `str` mixin (not `enum.StrEnum`, which needs Python 3.11+ — this
+    project requires exactly 3.10) so members compare equal to, hash
+    like, and JSON-serialize as their plain string value.
+    """
+
+    # host -> container
+    EXEC = "exec"
+    TOOL_RESULT = "tool_result"
+
+    # container -> host
+    RESULT = "result"
+    ERROR = "error"
+    TOOL_CALL = "tool_call"
+    FINAL_ANSWER = "final_answer"
+
+
+# Environment variable names carrying data from container.py (host) to
+# runner.py (in-container) at container startup — set once as part of
+# the container's environment, not part of the JSON Lines message
+# protocol itself, but crossing the same host/container boundary.
+ENV_SANDBOX_CONFIG_JSON = "SANDBOX_CONFIG_JSON"
+ENV_MCP_TOOLS_JSON = "MCP_TOOLS_JSON"
 
 
 class ExecMessage(TypedDict):
-    type: str  # MSG_EXEC
+    type: MsgType
     code: str
 
 
 class ResultMessage(TypedDict):
-    type: str  # MSG_RESULT
+    type: MsgType
     stdout: str
 
 
 class ErrorMessage(TypedDict):
-    type: str  # MSG_ERROR
+    type: MsgType
     error_type: str
     message: str
     traceback: str
 
 
 class ToolCallMessage(TypedDict):
-    type: str  # MSG_TOOL_CALL
+    type: MsgType
     name: str
     arguments: dict[str, Any]
 
 
 class ToolResultMessage(TypedDict):
-    type: str  # MSG_TOOL_RESULT
+    type: MsgType
     result: Any
 
 
 class FinalAnswerMessage(TypedDict):
-    type: str  # MSG_FINAL_ANSWER
+    type: MsgType
     answer: str
 
 
@@ -61,13 +79,13 @@ def response_text(response: dict) -> str:
     with only their surrounding prefix/newline formatting differing.
     """
     msg_type = response.get("type")
-    if msg_type == MSG_RESULT:
-        return response.get("stdout", "")
-    if msg_type == MSG_ERROR:
+    if msg_type == MsgType.RESULT:
+        return str(response.get("stdout", ""))
+    if msg_type == MsgType.ERROR:
         return response.get("traceback") or (
             f"{response.get('error_type', 'Error')}: "
             f"{response.get('message', '')}"
         )
-    if msg_type == MSG_FINAL_ANSWER:
-        return response.get("answer", "")
+    if msg_type == MsgType.FINAL_ANSWER:
+        return str(response.get("answer", ""))
     return repr(response)

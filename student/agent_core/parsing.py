@@ -9,6 +9,8 @@ import ast
 import json
 import re
 
+from agent_core.manual import JsonSchemaType
+
 _CODE_BLOCK_RE = re.compile(r"```python\s*\n(.*?)```", re.DOTALL)
 _UNCLOSED_CODE_BLOCK_RE = re.compile(r"```python\s*\n(.*)", re.DOTALL)
 
@@ -154,24 +156,24 @@ def _python_literal(value: str, json_type: str | None = None) -> str:
     quoted string. Falls back to the previous shape-based heuristic only
     when no schema entry exists for this tool/parameter.
     """
-    if json_type == "string":
+    if json_type == JsonSchemaType.STRING:
         return repr(value)
-    if json_type == "integer":
+    if json_type == JsonSchemaType.INTEGER:
         try:
             return str(int(value.strip()))
         except ValueError:
             return repr(value)
-    if json_type == "number":
+    if json_type == JsonSchemaType.NUMBER:
         try:
             return str(float(value.strip()))
         except ValueError:
             return repr(value)
-    if json_type == "boolean":
+    if json_type == JsonSchemaType.BOOLEAN:
         stripped_bool = value.strip().lower()
         if stripped_bool in ("true", "false"):
             return stripped_bool.capitalize()
         return repr(value)
-    if json_type in ("array", "object"):
+    if json_type in (JsonSchemaType.ARRAY, JsonSchemaType.OBJECT):
         try:
             return repr(ast.literal_eval(value))
         except (ValueError, SyntaxError):

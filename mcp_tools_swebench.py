@@ -19,7 +19,17 @@ from fastmcp import FastMCP
 from pydantic import ValidationError
 
 from student.agent_swebench.task import SWEBenchTaskInput
-from student.mcp_server_shared.share import truncate_output
+from student.mcp_server_shared.share import (
+    DERIVED_IMAGE_PREFIX,
+    ENV_MCP_TIMEOUT_DELAY,
+    ENV_MCP_TRANSPORT,
+    ENV_SANDBOX_OWNER_PID,
+    ENV_SWE_TASK_JSON,
+    OWNER_PID_LABEL,
+    SANDBOX_UID,
+    TransportMode,
+    truncate_output,
+)
 
 
 class SWEException(Exception):
@@ -34,20 +44,20 @@ mcp = FastMCP("SWE Bench MCP Server")
 # starting the MCP Server.
 try:
     TASK = SWEBenchTaskInput.model_validate(
-        json.loads(os.environ.get("SWE_TASK_JSON", "null")) or {}
+        json.loads(os.environ.get(ENV_SWE_TASK_JSON, "null")) or {}
     )
 except (ValidationError, json.JSONDecodeError):
     TASK = None
 
 # Load the timeout delay
 try:
-    TIMEOUT_DELAY_SEC = int(os.environ.get('MCP_TIMEOUT_DELAY', -1))
+    TIMEOUT_DELAY_SEC = int(os.environ.get(ENV_MCP_TIMEOUT_DELAY, -1))
     if TIMEOUT_DELAY_SEC < 1:
         raise ValueError('Invalid timeout delay')
 except ValueError:
-    print('Unable to load the env variable corresponding '
-          'to MCP_TIMEOUT_DELAY. Make sure it\'s present as '
-          'a positive int value (>=1).')
+    print(f'Unable to load the env variable corresponding '
+          f'to {ENV_MCP_TIMEOUT_DELAY}. Make sure it\'s present as '
+          f'a positive int value (>=1).')
     exit(1)
 
 
@@ -55,7 +65,7 @@ if TASK is None:
     print(
         "Could not load the task. Please restart "
         "the MCP server with a valid SWEBenchTaskInput in the "
-        "SWE_TASK_JSON env variable.",
+        f"{ENV_SWE_TASK_JSON} env variable.",
         file=sys.stderr,
     )
     exit(1)
@@ -71,7 +81,21 @@ if TASK is None:
 # an isolated test doesn't silently look in the wrong place.
 ROOT_DIR = os.environ.get('TESTBED_PATH', '/workspace/testbed')
 
-_SANDBOX_IMAGE_PREFIX = "sandbox-executor:"
+
+def _resolve_within_root(path_str: str) -> tuple[Path, str | None]:
+    """Resolve path_str and check it's inside ROOT_DIR — the guard
+    duplicated identically across every tool taking a filesystem path
+    argument. Returns (resolved_path, None) on success, or
+    (resolved_path, error_message) if outside ROOT_DIR — callers check
+    the second element and `return` it directly.
+    """
+    path = Path(path_str).resolve()
+    if not path.is_relative_to(ROOT_DIR):
+        return path, (
+            'Error: you are trying to interact with a file outside your '
+            f'allowed directory ({ROOT_DIR})'
+        )
+    return path, None
 
 
 def _find_sandbox_container() -> Container:
@@ -91,17 +115,17 @@ def _find_sandbox_container() -> Container:
     that had nothing to do with the actual command being run.
     """
     client = docker.from_env()
-    owner_pid = os.environ.get("SANDBOX_OWNER_PID")
+    owner_pid = os.environ.get(ENV_SANDBOX_OWNER_PID)
     candidates = []
     for container in client.containers.list():
         image = container.image
         if image is None:
             continue
         tags = image.tags or []
-        if not any(tag.startswith(_SANDBOX_IMAGE_PREFIX) for tag in tags):
+        if not any(tag.startswith(DERIVED_IMAGE_PREFIX) for tag in tags):
             continue
         if owner_pid is not None:
-            if container.labels.get("agent-smith.owner-pid") == owner_pid:
+            if container.labels.get(OWNER_PID_LABEL) == owner_pid:
                 return container
             continue
         candidates.append(container)
@@ -140,7 +164,8 @@ def _exec(
     # no such entry ("unable to find user sandbox"), so the numeric UID
     # is used instead, which Docker accepts without a passwd lookup.
     result = container.exec_run(
-        cmd, workdir=workdir, demux=True, user="1000", environment=env
+        cmd, workdir=workdir, demux=True,
+        user=str(SANDBOX_UID), environment=env,
     )
     # The docker-stubs type for .output is too loose (bytes | Iterator[bytes]
     # — it doesn't model demux=True specifically), but demux=True guarantees
@@ -187,7 +212,15 @@ def _get_container() -> Container:
 # on. run_tests() rewrites the script to target that copy instead.
 _TESTBED_ORIGINAL = '/testbed'
 
+# The shell `timeout` command's exit code when it kills the process.
+TIMEOUT_EXIT_CODE = 124
+
 _PYTHONWARNINGS_RE = re.compile(r"PYTHONWARNINGS=(['\"]?)([^'\"\s]*)\1")
+
+_PIP_EDITABLE_INSTALL_RE = re.compile(
+    r'((?:python\s+-m\s+)?pip\s+install\s+(?:-e|--editable)\s+'
+    r'"?\.(?:\[[^\]"]*\])?"?)'
+)
 
 
 def _suppress_deprecation_noise(script: str) -> str:
@@ -200,7 +233,7 @@ def _suppress_deprecation_noise(script: str) -> str:
     silently discarding our env-level default for that command and
     leaving DeprecationWarning noise unsuppressed.
     """
-    def _add(match: re.Match) -> str:
+    def _add(match: re.Match[str]) -> str:
         quote, value = match.group(1), match.group(2)
         if "DeprecationWarning" in value:
             return match.group(0)
@@ -226,9 +259,10 @@ with open(filepath, "wb") as f:
 # or regex containing quotes can't break out of the script.
 
 _LIST_FILES_SCRIPT = """
-import glob, os, sys
+import sys
+from pathlib import Path
 directory, pattern = sys.argv[1], sys.argv[2]
-matches = sorted(glob.glob(os.path.join(directory, pattern), recursive=True))
+matches = sorted(str(p) for p in Path(directory).rglob(pattern))
 print("\\n".join(matches))
 """
 
@@ -326,11 +360,9 @@ def read_file(filepath: str, start_line: int, end_line: int) -> str:
         '<line_number>: <line_content>' (like `cat -n`).
         An error message if the file cannot be read or the lines don't exist.
     """
-    # Prevent interracting with out of boundaries files
-    path = Path(filepath).resolve()
-    if not path.is_relative_to(ROOT_DIR):
-        return ('Error: you are trying to interract with a file outside your '
-                f'allowed directory ({ROOT_DIR})')
+    _, error = _resolve_within_root(filepath)
+    if error is not None:
+        return error
 
     # Prevent invalid lines
     if start_line <= 0 or end_line <= 0:
@@ -380,11 +412,9 @@ def edit_file(filepath: str, old_str: str, new_str: str) -> str:
         A confirmation message on success, or an error message if the file
         cannot be read/written or old_str is not found in it.
     """
-    # Prevent interracting with out of boundaries files
-    path = Path(filepath).resolve()
-    if not path.is_relative_to(ROOT_DIR):
-        return ('Error: you are trying to interract with a file outside your '
-                f'allowed directory ({ROOT_DIR})')
+    _, error = _resolve_within_root(filepath)
+    if error is not None:
+        return error
 
     container = _get_container()
     stdout, stderr, exit_code = _exec(container, ["cat", filepath])
@@ -415,22 +445,19 @@ def edit_file(filepath: str, old_str: str, new_str: str) -> str:
 @mcp.tool
 def list_files(directory: str, pattern: str) -> str:
     """
-    List files in a directory matching a given glob pattern.
+    List files in a directory matching a given glob pattern, recursively.
 
     Args:
         directory: Absolute path to the directory to search.
-        pattern: Glob pattern to match filenames. To search subdirectories
-            recursively, prefix it with '**/', e.g. '**/*.py' — a bare
-            pattern like '*.py' only matches the directory's top level.
+        pattern: Glob pattern to match filenames (e.g. '*.py'). Matches
+            recursively through all subdirectories.
 
     Returns:
         The matching file paths, one per line, or a message if none match.
     """
-    # Prevent interracting with out of boundaries files
-    path = Path(directory).resolve()
-    if not path.is_relative_to(ROOT_DIR):
-        return ('Error: you are trying to interract with a file outside your '
-                f'allowed directory ({ROOT_DIR})')
+    _, error = _resolve_within_root(directory)
+    if error is not None:
+        return error
 
     container = _get_container()
     stdout, stderr, exit_code = _exec(
@@ -526,11 +553,9 @@ def find_references(name: str, filepath: str, line: int) -> str:
     declaration, not a usage.
     Output format is similar to search_code.
     """
-    # Prevent interracting with out of boundaries files
-    path = Path(filepath).resolve()
-    if not path.is_relative_to(ROOT_DIR):
-        return ('Error: you are trying to interract with a file outside your '
-                f'allowed directory ({ROOT_DIR})')
+    path, error = _resolve_within_root(filepath)
+    if error is not None:
+        return error
 
     container = _get_container()
     _, _, exists_code = _exec(container, ["test", "-d", ROOT_DIR])
@@ -575,8 +600,8 @@ def run_tests() -> str:
     # run_tests() until this flag combo (which skips the network-
     # dependent build step) was added. --no-deps for the same reason
     # (dependency resolution also needs network).
-    adapted_script = adapted_script.replace(
-        "pip install -e .", "pip install -e . --no-build-isolation --no-deps"
+    adapted_script = _PIP_EDITABLE_INSTALL_RE.sub(
+        r"\1 --no-build-isolation --no-deps", adapted_script
     )
     # Repetitive DeprecationWarning noise (e.g. sympy's `collections`
     # ABC imports, re-triggered per test module) can fill even the
@@ -603,9 +628,10 @@ def run_tests() -> str:
         env={
             "PYTHONPATH": ROOT_DIR,
             "PYTHONWARNINGS": "ignore::DeprecationWarning",
+            "HOME": "/workspace",
         },
     )
-    if exit_code == 124:
+    if exit_code == TIMEOUT_EXIT_CODE:
         return f'Evaluation timed out ({TIMEOUT_DELAY_SEC}s)!'
     # Truncated separately, not as one concatenated blob: stderr carries
     # the full `bash -x` trace of the eval_script (conda activation,
@@ -624,20 +650,22 @@ def run_tests() -> str:
 @mcp.tool
 def get_patch() -> str:
     """
-    Retrieve the unified git diff of all changes made to the repository.
+    Retrieve the unified git diff of all changes made to the repository,
+    including newly created files.
 
-    Runs the command 'git diff HEAD' and outputs the result.
-    New files must be added with 'git add' (or 'git add -N') to be
-    included in the output.
+    Runs 'git add -A -N' (intent-to-add, records new files without
+    staging their content) so untracked files show up in the diff, then
+    'git diff HEAD'.
     """
     container = _get_container()
+    _exec(container, ["git", "add", "-A", "-N"], workdir=ROOT_DIR)
     stdout, stderr, exit_code = _exec(
         container,
         ["timeout", str(TIMEOUT_DELAY_SEC),
          "git", "-c", "core.fileMode=false", 'diff', 'HEAD'],
         workdir=ROOT_DIR,
     )
-    if exit_code == 124:
+    if exit_code == TIMEOUT_EXIT_CODE:
         return ('Timeout expired while getting git '
                 f'diff ({TIMEOUT_DELAY_SEC}s)!')
     if exit_code != 0:
@@ -656,11 +684,9 @@ def run_command(command: str, workdir: str) -> str:
     Execute a shell command in the specified working directory.
     Returns the command's stdout, stderr, and exit code.
     """
-    # Prevent interracting with out of boundaries files
-    path = Path(workdir).resolve()
-    if not path.is_relative_to(ROOT_DIR):
-        return ('Error: you are trying to interract with a file outside your '
-                f'allowed directory ({ROOT_DIR})')
+    _, error = _resolve_within_root(workdir)
+    if error is not None:
+        return error
 
     if _ORIGINAL_TESTBED_RE.search(command):
         return ('Error: your command references /testbed, the original '
@@ -677,7 +703,7 @@ def run_command(command: str, workdir: str) -> str:
         ["timeout", str(TIMEOUT_DELAY_SEC), "bash", "-c", command],
         workdir=workdir,
     )
-    if exit_code == 124:
+    if exit_code == TIMEOUT_EXIT_CODE:
         return ('Timeout expired while executing '
                 f'your command ({TIMEOUT_DELAY_SEC}s)!')
     return ("=== STDOUT ===\n"
@@ -716,19 +742,23 @@ def solve_swebench_task() -> str:
 
 if __name__ == "__main__":
     # Get transport mode from env variable MCP_TRANSPORT
-    transport_mode = os.environ.get("MCP_TRANSPORT", "stdio")
+    transport_mode = os.environ.get(
+        ENV_MCP_TRANSPORT, TransportMode.STDIO.value
+    )
 
     # Verify transport mode
-    if transport_mode != "http" and transport_mode != "stdio":
+    if transport_mode not in (
+        TransportMode.HTTP.value, TransportMode.STDIO.value
+    ):
         raise TypeError(
             f'Wrong transport mode ("{transport_mode}") '
-            'provided in the env variable "MCP_TRANSPORT".'
+            f'provided in the env variable "{ENV_MCP_TRANSPORT}".'
         )
 
     # Use literal value for mypy
-    mode: Literal["http", "stdio"] = "http"
-    if transport_mode == 'stdio':
-        mode = 'stdio'
+    mode: Literal["http", "stdio"] = TransportMode.HTTP.value
+    if transport_mode == TransportMode.STDIO.value:
+        mode = TransportMode.STDIO.value
 
     # Listen
     mcp.run(transport=mode, show_banner=False)
