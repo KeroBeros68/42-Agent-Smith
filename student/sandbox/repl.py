@@ -8,6 +8,7 @@ container.py, prints the result/error, exits cleanly on `exit` or EOF
 import codeop
 
 from sandbox.container import SandboxContainer
+from sandbox.executor.protocol import response_text
 from sandbox.mcp_bridge import MCPBridge
 from sandbox.session import relay_tool_calls
 
@@ -41,17 +42,18 @@ def _read_block() -> str | None:
 
 
 def _format_response(response: dict) -> str:
+    """Human-facing formatting, layered onto protocol.response_text()'s
+    shared result/error/final_answer/fallback classification — only the
+    surrounding prefix/trailing newline differ from loop.py's LLM-facing
+    Observation text.
+    """
     msg_type = response.get("type")
-    if msg_type == "result":
-        return response.get("stdout", "")
-    if msg_type == "error":
-        return response.get("traceback") or (
-            f"{response.get('error_type', 'Error')}: "
-            f"{response.get('message', '')}\n"
-        )
+    text = response_text(response)
     if msg_type == "final_answer":
-        return f"final_answer: {response.get('answer', '')}\n"
-    return f"{response!r}\n"
+        return f"final_answer: {text}\n"
+    if msg_type == "result":
+        return text
+    return f"{text}\n"
 
 
 def run(

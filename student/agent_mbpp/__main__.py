@@ -172,6 +172,7 @@ def main() -> None:
         mcp_bridge.connect()
         tools = mcp_bridge.list_tools()
         tools_doc = manual.build_manual(tools)
+        tool_param_types = manual.extract_param_types(tools)
 
         config = SandboxConfig(**json.loads(SANDBOX_TEMPLATE.read_text()))
         container = session.build_container(
@@ -188,6 +189,7 @@ def main() -> None:
                 max_input_tokens=MAX_INPUT_TOKENS,
                 max_output_tokens=MAX_OUTPUT_TOKENS,
                 max_time_seconds=MAX_TIME_SECONDS,
+                tool_param_types=tool_param_types,
             )
 
         solution.system_prompt = system_prompt

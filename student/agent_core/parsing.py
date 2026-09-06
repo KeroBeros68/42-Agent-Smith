@@ -43,8 +43,18 @@ _REACT_ACTION_RE = re.compile(
 )
 
 
-def extract_code(llm_output: str) -> tuple[str | None, str | None]:
+def extract_code(
+    llm_output: str,
+    tool_param_types: dict[str, dict[str, str]] | None = None,
+) -> tuple[str | None, str | None]:
     """Return (code, warning) extracted from llm_output.
+
+    tool_param_types (optional, {tool_name: {param_name: json_type}} from
+    manual.extract_param_types()) lets format (b)'s XML parameter values
+    be typed by the tool's real declared JSON Schema type instead of
+    guessed from the raw string's shape — see _python_literal(). None
+    falls back to that shape-based guess entirely (e.g. callers that
+    don't have a tool list handy).
 
     `code` is None if no format matched at all — the explicit "no valid
     code block was found" signal (§V.1); the caller (loop.py) decides
@@ -83,7 +93,7 @@ def extract_code(llm_output: str) -> tuple[str | None, str | None]:
     if code is not None:
         return code, None
 
-    code = _extract_xml_tool_calls(llm_output)
+    code = _extract_xml_tool_calls(llm_output, tool_param_types)
     if code is not None:
         return code, None
     code = _extract_json_tool_calls(llm_output)
@@ -134,8 +144,39 @@ def _extract_liquid_tool_calls(llm_output: str) -> str | None:
     return "\n".join(lines) if lines else None
 
 
-def _python_literal(value: str) -> str:
-    """Render a captured XML parameter value as a Python literal."""
+def _python_literal(value: str, json_type: str | None = None) -> str:
+    """Render a captured XML parameter value as a Python literal.
+
+    Uses the tool's declared JSON Schema type when known — correct by
+    construction, unlike guessing from the value's shape: a *string*
+    parameter whose value merely looks numeric (e.g. code="123") would
+    otherwise be rendered as a bare int/float literal instead of a
+    quoted string. Falls back to the previous shape-based heuristic only
+    when no schema entry exists for this tool/parameter.
+    """
+    if json_type == "string":
+        return repr(value)
+    if json_type == "integer":
+        try:
+            return str(int(value.strip()))
+        except ValueError:
+            return repr(value)
+    if json_type == "number":
+        try:
+            return str(float(value.strip()))
+        except ValueError:
+            return repr(value)
+    if json_type == "boolean":
+        stripped_bool = value.strip().lower()
+        if stripped_bool in ("true", "false"):
+            return stripped_bool.capitalize()
+        return repr(value)
+    if json_type in ("array", "object"):
+        try:
+            return repr(ast.literal_eval(value))
+        except (ValueError, SyntaxError):
+            return repr(value)
+
     stripped = value.strip()
     if re.fullmatch(r"-?\d+", stripped):
         return stripped
@@ -146,7 +187,10 @@ def _python_literal(value: str) -> str:
     return repr(value)
 
 
-def _extract_xml_tool_calls(llm_output: str) -> str | None:
+def _extract_xml_tool_calls(
+    llm_output: str,
+    tool_param_types: dict[str, dict[str, str]] | None = None,
+) -> str | None:
     """Convert XML-style <invoke>/<parameter> tool calls (§V.1, format (b))
     to equivalent Python code — one print(tool(...)) call per <invoke>,
     in order. print() rather than the subject's own `result = ...`
@@ -157,16 +201,23 @@ def _extract_xml_tool_calls(llm_output: str) -> str | None:
     substring) since providers prefix them differently — e.g. DeepSeek's
     own <｜DSML｜invoke>/<｜DSML｜parameter>, not just the Anthropic-style
     <invoke> the subject's example shows.
+
+    tool_param_types (see extract_code()) types each parameter value by
+    the tool's real declared schema instead of _python_literal()'s
+    shape-based guess.
     """
     invokes = _TOOL_CALL_RE.findall(llm_output)
     if not invokes:
         return None
 
+    tool_param_types = tool_param_types or {}
     lines = []
     for tool_name, body in invokes:
         params = _PARAMETER_RE.findall(body)
+        param_types = tool_param_types.get(tool_name, {})
         args = ", ".join(
-            f"{name}={_python_literal(value)}" for name, value in params
+            f"{name}={_python_literal(value, param_types.get(name))}"
+            for name, value in params
         )
         lines.append(f"print({tool_name}({args}))")
     return "\n".join(lines)

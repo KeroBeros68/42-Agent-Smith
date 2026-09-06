@@ -11,6 +11,7 @@ from agent_core.provider import LLM, LLMError
 from agent_core.sandbox_client import run_code
 from agent_core.schemas import StepMetrics
 from sandbox.container import SandboxContainer
+from sandbox.executor.protocol import response_text
 from sandbox.mcp_bridge import MCPBridge
 
 _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -30,6 +31,7 @@ def run(
     max_input_tokens: int | None = None,
     max_output_tokens: int | None = None,
     max_time_seconds: float | None = None,
+    tool_param_types: dict[str, dict[str, str]] | None = None,
 ) -> tuple[list[StepMetrics], str | None, str | None]:
     """Run the agent loop and return the per-step metrics, final answer and
     stop error.
@@ -53,6 +55,12 @@ def run(
     returns, so this can't preempt mid-call, only prevent starting
     another one once the budget is already exhausted. None disables the
     corresponding check (e.g. no such budget applies to the REPL).
+
+    tool_param_types (from manual.extract_param_types(), optional) is
+    passed straight through to extract_code() so format (b)'s XML
+    parameters are typed by the tool's real declared schema rather than
+    guessed — benchmark-agnostic (derived from whichever MCP server is
+    connected), so no MBPP-/SWE-bench-specific logic is added here.
     """
     llm = LLM(model_name)
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
@@ -91,7 +99,7 @@ def run(
         total_input_tokens += metrics.input_tokens
         total_output_tokens += metrics.output_tokens
 
-        code, warning = extract_code(metrics.llm_output)
+        code, warning = extract_code(metrics.llm_output, tool_param_types)
         if code is None:
             _announce(step, "Retrying")
             observation = "No valid code block was found in your response."
@@ -101,7 +109,7 @@ def run(
         _announce(step, "Executing")
         metrics.sandbox_input = code
         response = run_code(container, mcp_bridge, code)
-        observation = _format_observation(response)
+        observation = response_text(response)
         if warning is not None:
             observation = f"{warning}\n\n{observation}"
         metrics.sandbox_output = observation
@@ -113,17 +121,3 @@ def run(
             break
 
     return steps, final_answer, error
-
-
-def _format_observation(response: dict) -> str:
-    msg_type = response.get("type")
-    if msg_type == "result":
-        return response.get("stdout", "")
-    if msg_type == "error":
-        return response.get("traceback") or (
-            f"{response.get('error_type', 'Error')}: "
-            f"{response.get('message', '')}"
-        )
-    if msg_type == "final_answer":
-        return response.get("answer", "")
-    return repr(response)
