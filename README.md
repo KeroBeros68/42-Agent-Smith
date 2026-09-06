@@ -1,8 +1,8 @@
 *This project has been created as part of the 42 curriculum by Kebertra, Gtourdia.*
 
-# Agent Smith
+# 🤖 Agent Smith
 
-## Description
+## 📝 Description
 
 Agent Smith is an autonomous coding agent built for the 42 "Agent Smith" project.
 It solves programming benchmark tasks (MBPP and SWE-bench) entirely on its own:
@@ -33,9 +33,9 @@ Every run produces a fully traceable `solution.json` (system prompt, per-step LL
 output, sandbox input/output, token usage, timing) so its reasoning process can be
 audited and reproduced.
 
-## System Architecture
+## 🏗️ System Architecture
 
-### Repository Layout
+### 📁 Repository Layout
 
 ```
 .
@@ -69,7 +69,7 @@ audited and reproduced.
     └── mcp_server_shared/    # Constants shared by both MCP tool servers
 ```
 
-### Data Contract (StepMetrics / SolutionOutput)
+### 📐 Data Contract (StepMetrics / SolutionOutput)
 
 `agent_core/schemas.py` defines the models both benchmarks write to `solution.json`,
 mirroring the moulinette's own reference contract:
@@ -115,7 +115,7 @@ class SolutionOutput(BaseModel):
 fields (`task_id: int` vs `instance_id: str`), so each benchmark defines its own
 task model next to the code that uses it (`agent_mbpp/task.py`, `agent_swebench/task.py`).
 
-### MCP Protocol (Tools, Resources, Prompts)
+### 🔌 MCP Protocol (Tools, Resources, Prompts)
 
 The sandbox container is an MCP **client** (`sandbox/mcp_bridge.py`); `mcp_tools_mbpp.py`
 and `mcp_tools_swebench.py` are independent MCP **servers** (built with FastMCP),
@@ -131,7 +131,7 @@ each exposing:
 Both **stdio** and **HTTP streamable** transports are supported, selected via the
 `MCP_TRANSPORT` environment variable.
 
-### LLM Providers & Multi-Key Rotation
+### 🔑 LLM Providers & Multi-Key Rotation
 
 `agent_core/provider/base.py` wraps [litellm](https://github.com/BerriAI/litellm)'s
 `Router` behind a single `LLM` class, so the rest of the agent never talks to a
@@ -146,9 +146,9 @@ registered as its own Router deployment and dispatched to by id, guaranteeing
 every key is tried at most once per call before giving up — round-robining the
 starting key across calls so successful traffic is spread across the whole pool.
 
-## Agent Loop Explanation
+## 🔄 Agent Loop Explanation
 
-### Thought → Code → Observation Cycle
+### 🔁 Thought → Code → Observation Cycle
 
 `agent_core/loop.py::run()` drives the whole agent: at each iteration, the LLM is
 asked to produce a short **Thought** (plain-text reasoning) followed by exactly one
@@ -175,7 +175,7 @@ flowchart TD
     Final -- No --> Budget
 ```
 
-### Code Extraction (Supported Model Formats)
+### ✂️ Code Extraction (Supported Model Formats)
 
 Not every model follows the fenced ` ```python ` block shown in the example.
 `agent_core/parsing.py::extract_code()` tries, in order:
@@ -194,7 +194,7 @@ Not every model follows the fenced ` ```python ` block shown in the example.
 Every one of these was added after observing a real model default to it instead of
 the documented format — not implemented speculatively.
 
-### Cumulative Budgets & Graceful Shutdown
+### ⏱️ Cumulative Budgets & Graceful Shutdown
 
 `loop.run()` accepts `max_input_tokens`, `max_output_tokens`, and `max_time_seconds`,
 checked at the start of every iteration against the running total so far. Both
@@ -206,7 +206,7 @@ for a graceful shutdown to win the race against the moulinette's own SIGTERM/SIG
 (`SystemExit` subclass) exception, so the existing `with container:` block still
 unwinds cleanly and removes the Docker container instead of leaving it orphaned.
 
-### Error Diagnostics
+### 🩺 Error Diagnostics
 
 `loop.run()` returns `(steps, final_answer, error)` — the third element carries the
 underlying `LLMError`'s message when that is why the loop stopped, so a provider
@@ -214,9 +214,9 @@ failure (rate limit, invalid key, malformed response) shows up as a real, action
 message in `solution.json`'s `error` field instead of an opaque `error: null`
 indistinguishable from a normal `max_iterations` run.
 
-## Sandbox Design
+## 📦 Sandbox Design
 
-### Interaction Overview
+### 🔀 Interaction Overview
 
 ```mermaid
 sequenceDiagram
@@ -245,7 +245,7 @@ is relayed through the host process (`session.py`), which is the only side with
 network/Docker access. This split is what lets the container itself keep
 `network_mode="none"` while tools like `run_tests()` remain fully functional.
 
-### Docker Isolation
+### 🐳 Docker Isolation
 
 Every session gets its own container, built from a derived image (base image +
 the executor code baked in via `COPY --chown=1000:1000`, since `docker cp` into a
@@ -259,7 +259,7 @@ read-only container fails at runtime). Isolation constraints (§V.2.3):
   calls made by the SWE-bench tools (still can't bypass file permissions as root).
 - **`pids_limit`** and **`mem_limit`** — fork-bomb and memory-exhaustion protection.
 
-### Restricted Execution Environment
+### 🔒 Restricted Execution Environment
 
 Docker isolates the OS; `sandbox/executor/restrictions.py` is what stops
 `import os` or dangerous builtins at the **Python** level inside the container
@@ -275,7 +275,7 @@ Docker isolates the OS; `sandbox/executor/restrictions.py` is what stops
 - A per-execution timeout (`executor/watchdog.py`, `SIGALRM`-based) bounds any
   single call, independent of the agent's own cumulative time budget.
 
-**Known, documented limitation**: object introspection
+**⚠️ Known, documented limitation**: object introspection
 (`().__class__.__bases__[0].__subclasses__()`) can reach classes already loaded
 in memory without ever calling `import`, bypassing the builtins allowlist. Closing
 this fully would require a real AST-level sandbox, which the subject explicitly
@@ -283,7 +283,7 @@ forbids — Docker's own isolation (no network, read-only filesystem, no
 capabilities) remains the actual security boundary; this module is defense in
 depth on top of it, not the only line of defense.
 
-### Container Lifecycle & Multi-Session Safety
+### ♻️ Container Lifecycle & Multi-Session Safety
 
 `SandboxContainer` is a context manager: `with container:` guarantees the
 container (and its derived image) are stopped and removed on exit — including on
@@ -298,9 +298,9 @@ container-discovery tools (which run `docker exec` from outside the sandbox's ow
 restrictions) always find *their own* session's container, never another one
 running concurrently.
 
-## Tool Implementation Details
+## 🛠️ Tool Implementation Details
 
-### MBPP Tools
+### 🐍 MBPP Tools
 
 `mcp_tools_mbpp.py` exposes a single tool, `run_tests(code: str)` — by design,
 MBPP only needs test execution (§V.3.2). Its pipeline:
@@ -321,7 +321,7 @@ MBPP only needs test execution (§V.3.2). Its pipeline:
 4. Output is truncated (`truncate_output()`, 50k chars) before being returned,
    bounding what accumulates into `StepMetrics`/`solution.json`.
 
-### SWE-Bench Tools
+### 🐛 SWE-Bench Tools
 
 `mcp_tools_swebench.py` exposes 9 tools, in three families:
 
@@ -358,9 +358,9 @@ Implementation details:
   scoped by the `agent-smith.owner-pid` label rather than an image-name search,
   so concurrent sandbox sessions never cross-target each other's container.
 
-## Instructions
+## 🚀 Instructions
 
-### Prerequisites
+### ✅ Prerequisites
 
 - Python 3.10 (the project pins `requires-python = "==3.10.*"`).
 - [`uv`](https://github.com/astral-sh/uv) — used for all dependency management
@@ -371,7 +371,7 @@ Implementation details:
 - At least one LLM provider API key (DeepSeek and/or OpenRouter are the two
   providers exercised by this project — see Configuration below).
 
-### Installation
+### 📥 Installation
 
 ```bash
 make install        # uv sync — installs student/ (root) dependencies
@@ -382,7 +382,7 @@ The two `uv` projects are independent on purpose: `moulinette` is the
 evaluation/task-generation tool (provided, not part of the agent itself), while
 the root project is the agent implementation.
 
-### Configuration (API Keys / .env)
+### 🔐 Configuration (API Keys / .env)
 
 Copy `.env.example` to `.env` and fill in the keys for the provider(s) you plan
 to use:
@@ -399,7 +399,7 @@ Multiple comma-separated keys for the same provider are rotated automatically
 `agent_mbpp`/`agent_swebench`/`sandbox` at runtime, not meant to be filled in
 by hand.
 
-### Running the Agent (MBPP / SWE-Bench)
+### ▶️ Running the Agent (MBPP / SWE-Bench)
 
 Generate a task, then run the agent against it, via the provided `Makefile`:
 
@@ -421,7 +421,7 @@ make runs  BENCH=swebench N=5 MODEL=deepseek/deepseek-v4-flash
 Output is written to `cache/<bench>_solution.json` (or `_solution_<i>.json`
 for the batch form) — see Data Contract above for its schema.
 
-### Interactive Sandbox REPL
+### 💻 Interactive Sandbox REPL
 
 To explore or debug the sandbox directly, without a benchmark task or an LLM in
 the loop:
@@ -435,7 +435,7 @@ uv run sandbox --mcp-server http://localhost:8000                # HTTP transpor
 This drops into an interactive prompt where Python code can be typed and run
 directly inside the same restricted container the agent itself uses.
 
-### Makefile Targets
+### 🧰 Makefile Targets
 
 | Target | Purpose |
 |---|---|
@@ -447,25 +447,25 @@ directly inside the same restricted container the agent itself uses.
 | `make run BENCH=... MODEL=... [PROVIDER_URL=...]` | Run the agent on one task |
 | `make runs BENCH=... N=... MODEL=...` | Run the agent on N tasks |
 
-## Benchmark Results and Analysis
+## 📊 Benchmark Results and Analysis
 
-### Summary
+### 📈 Summary
 
 Full benchmark results (≥5 models across ≥2 providers, MBPP and SWE-bench) are
 tracked separately in [`BENCHMARK_REPORT.md`](BENCHMARK_REPORT.md), per §V.7 of
 the subject.
 
-### Key Findings
+### 🔎 Key Findings
 
 See `BENCHMARK_REPORT.md`'s own Conclusions section.
 
-### Full Report
+### 📄 Full Report
 
 → [`BENCHMARK_REPORT.md`](BENCHMARK_REPORT.md)
 
-## Resources
+## 📚 Resources
 
-### References
+### 🔗 References
 
 - [Stéphane Robert — Blog](https://blog.stephane-robert.info/) — Docker/Linux/DevOps
   reference articles used while designing the sandbox's container isolation.
@@ -484,7 +484,7 @@ See `BENCHMARK_REPORT.md`'s own Conclusions section.
 - [SWE-bench dataset paper](https://arxiv.org/abs/2310.06770) — *SWE-bench: Can
   Language Models Resolve Real-World GitHub Issues?* (Jimenez et al., 2023).
 
-### AI Usage Disclosure
+### 🧠 AI Usage Disclosure
 
 Claude Code (Anthropic) was used throughout this project's implementation,
 debugging, and documentation — including this README. Every change was
