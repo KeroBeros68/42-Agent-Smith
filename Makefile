@@ -56,14 +56,20 @@ debug: install
 
 # --- Tasks & Agent runs ---
 
-MODEL     ?= deepseek/deepseek-v4-flash
-BENCH     ?= mbpp
-N         ?= 3
-CACHE_DIR := cache
+MODEL        ?= deepseek/deepseek-v4-flash
+BENCH        ?= mbpp
+N            ?= 3
+PROVIDER_URL ?=
+CACHE_DIR    := cache
 
-# Reads one KEY=value from .env without sourcing the whole file (it also
-# holds JSON values with braces, which break plain `source`/`export`).
-DEEPSEEK_KEY_CMD = python3 -c "import re; c=open('.env').read(); m=re.search(r'^DEEPSEEK_API_KEY=(.*)$$', c, re.MULTILINE); print(m.group(1) if m else '')"
+# Exports <PROVIDER>_API_KEY (derived from the provider/ prefix of $(MODEL))
+# by reading .env directly — sourcing the whole file breaks on the JSON
+# values it also holds (they contain braces).
+define export_provider_key
+PROVIDER_VAR=$$(echo "$(MODEL)" | cut -d'/' -f1 | tr 'a-z' 'A-Z')_API_KEY; \
+KEY_VAL=$$(PV="$$PROVIDER_VAR" python3 -c "import re, os; c = open('.env').read(); m = re.search('^' + os.environ['PV'] + '=(.*)', c, re.MULTILINE); print(m.group(1) if m else '')"); \
+export $$PROVIDER_VAR="$$KEY_VAL"
+endef
 
 # make task BENCH=mbpp OR make task BENCH=mbpp TASK_ID=282
 # make task BENCH=swebench OR make task BENCH=swebench TASK_ID=django__django-11066
@@ -80,25 +86,27 @@ tasks:
 	done
 
 # make run BENCH=mbpp
-# make run BENCH=swebench MODEL=deepseek/deepseek-v4-flash
+# make run BENCH=swebench MODEL=openrouter/minimax/minimax-m2.7:free PROVIDER_URL=https://openrouter.ai/api/v1
 run:
 	@printf "$(CYAN)[Run]$(RESET) ➡️  Running the agent on one $(BENCH) task\n"
-	@export DEEPSEEK_API_KEY=$$($(DEEPSEEK_KEY_CMD)); \
+	@$(export_provider_key); \
 	cd student && uv run python -m agent_$(BENCH) \
 		--task-file ../$(CACHE_DIR)/$(BENCH)_task.json \
 		--output ../$(CACHE_DIR)/$(BENCH)_solution.json \
-		--model-name "$(MODEL)"
+		--model-name "$(MODEL)" \
+		$(if $(PROVIDER_URL),--provider-url "$(PROVIDER_URL)")
 
-# make runs BENCH=swebench N=5
+# make runs BENCH=swebench N=5 MODEL=openrouter/minimax/minimax-m2.7:free PROVIDER_URL=https://openrouter.ai/api/v1
 runs:
 	@printf "$(CYAN)[Runs]$(RESET) ➡️  Running the agent on $(N) $(BENCH) tasks\n"
-	@export DEEPSEEK_API_KEY=$$($(DEEPSEEK_KEY_CMD)); \
+	@$(export_provider_key); \
 	for i in $$(seq 1 $(N)); do \
 		printf "$(CYAN)  -> run $$i/$(N)$(RESET)\n"; \
 		(cd student && uv run python -m agent_$(BENCH) \
 			--task-file ../$(CACHE_DIR)/$(BENCH)_task_$$i.json \
 			--output ../$(CACHE_DIR)/$(BENCH)_solution_$$i.json \
-			--model-name "$(MODEL)") || exit 1; \
+			--model-name "$(MODEL)" \
+			$(if $(PROVIDER_URL),--provider-url "$(PROVIDER_URL)")) || exit 1; \
 	done
 
 .PHONY: install lint lint-strict debug task tasks run runs

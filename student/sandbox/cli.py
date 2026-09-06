@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pydantic
 from docker.errors import DockerException
+from mcp.shared.exceptions import McpError
 
 from sandbox import repl, session
 from sandbox.config import SandboxConfig
@@ -107,6 +108,12 @@ def main() -> None:
             repl.run(c, mcp_bridge)
     except DockerException as e:
         print(f"error: could not reach Docker: {e}", file=sys.stderr)
+        sys.exit(1)
+    except McpError as e:
+        print(
+            f"error: could not connect to the MCP server: {e}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 

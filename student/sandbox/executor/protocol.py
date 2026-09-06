@@ -51,3 +51,23 @@ class ToolResultMessage(TypedDict):
 class FinalAnswerMessage(TypedDict):
     type: str  # MSG_FINAL_ANSWER
     answer: str
+
+
+def response_text(response: dict) -> str:
+    """Return the plain text content of a container response — the
+    result/error/final_answer/fallback classification shared by
+    agent_core.loop's LLM-facing Observation text and sandbox.repl's
+    human-facing display, which previously duplicated this branching
+    with only their surrounding prefix/newline formatting differing.
+    """
+    msg_type = response.get("type")
+    if msg_type == MSG_RESULT:
+        return response.get("stdout", "")
+    if msg_type == MSG_ERROR:
+        return response.get("traceback") or (
+            f"{response.get('error_type', 'Error')}: "
+            f"{response.get('message', '')}"
+        )
+    if msg_type == MSG_FINAL_ANSWER:
+        return response.get("answer", "")
+    return repr(response)

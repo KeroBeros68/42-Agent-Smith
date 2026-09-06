@@ -12,7 +12,9 @@ from agent_core.schemas import TaskInput
 class MBPPTaskInput(TaskInput):
     """Input for an MBPP task."""
 
-    task_id: int = Field(..., description="MBPP task identifier (integer)")
+    task_id: int = Field(
+        ..., ge=0, description="MBPP task identifier (integer)"
+    )
     task_definition: str = Field(
         ...,
         description=(

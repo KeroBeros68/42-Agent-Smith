@@ -231,6 +231,7 @@ def main() -> None:
         mcp_bridge.connect()
         tools = mcp_bridge.list_tools()
         tools_doc = manual.build_manual(tools)
+        tool_param_types = manual.extract_param_types(tools)
 
         config = SandboxConfig(**json.loads(SANDBOX_TEMPLATE.read_text()))
         # Unlike agent_mbpp, the image is task-provided, not built locally
@@ -241,7 +242,7 @@ def main() -> None:
         )
         with container:
             system_prompt = build_system_prompt(task, tools_doc)
-            steps, final_answer = loop.run(
+            steps, final_answer, loop_error = loop.run(
                 container,
                 mcp_bridge,
                 model_name=args.model_name,
@@ -250,6 +251,7 @@ def main() -> None:
                 max_input_tokens=MAX_INPUT_TOKENS,
                 max_output_tokens=MAX_OUTPUT_TOKENS,
                 max_time_seconds=MAX_TIME_SECONDS,
+                tool_param_types=tool_param_types,
             )
 
         solution.system_prompt = system_prompt
@@ -262,6 +264,7 @@ def main() -> None:
             final_answer is not None and _last_run_tests_passed(steps)
         )
         solution.solution = final_answer or ""
+        solution.error = loop_error
     except Exception as e:
         # Broad on purpose — same rationale as agent_mbpp/__main__.py.
         solution.error = str(e)

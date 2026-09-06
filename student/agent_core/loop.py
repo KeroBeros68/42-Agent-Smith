@@ -10,7 +10,9 @@ from agent_core.parsing import extract_code
 from agent_core.provider import LLM, LLMError
 from agent_core.sandbox_client import run_code
 from agent_core.schemas import StepMetrics
+from mcp_server_shared.share import truncate_output
 from sandbox.container import SandboxContainer
+from sandbox.executor.protocol import response_text
 from sandbox.mcp_bridge import MCPBridge
 
 _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -30,15 +32,23 @@ def run(
     max_input_tokens: int | None = None,
     max_output_tokens: int | None = None,
     max_time_seconds: float | None = None,
-) -> tuple[list[StepMetrics], str | None]:
-    """Run the agent loop and return the per-step metrics and final answer.
+    tool_param_types: dict[str, dict[str, str]] | None = None,
+) -> tuple[list[StepMetrics], str | None, str | None]:
+    """Run the agent loop and return the per-step metrics, final answer and
+    stop error.
 
     Stops early on final_answer, or if the LLM call itself fails
     (LLMError) — in both cases the steps already collected are kept and
     returned rather than lost. The second element is the code passed to
     final_answer() if the loop stopped that way, else None (max_iterations
     reached or LLMError) — this is what lets the caller set
-    SolutionOutput.success/.solution without guessing from the steps.
+    SolutionOutput.success/.solution without guessing from the steps. The
+    third element is the LLMError's message if that's why the loop
+    stopped, else None (final_answer or max_iterations/budget reached) —
+    without this, every LLM failure (a provider's 502, an invalid key...)
+    used to look identical to a normal max_iterations run in solution.json
+    (iterations: 0, error: None), impossible to diagnose without manually
+    reproducing the call.
 
     Cumulative token/time budgets (§VI.1.1/1.2) are enforced between
     iterations: checked at the start of each step against the running
@@ -46,11 +56,18 @@ def run(
     returns, so this can't preempt mid-call, only prevent starting
     another one once the budget is already exhausted. None disables the
     corresponding check (e.g. no such budget applies to the REPL).
+
+    tool_param_types (from manual.extract_param_types(), optional) is
+    passed straight through to extract_code() so format (b)'s XML
+    parameters are typed by the tool's real declared schema rather than
+    guessed — benchmark-agnostic (derived from whichever MCP server is
+    connected), so no MBPP-/SWE-bench-specific logic is added here.
     """
     llm = LLM(model_name)
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     steps: list[StepMetrics] = []
     final_answer: str | None = None
+    error: str | None = None
     start_time = time.time()
     total_input_tokens = 0
     total_output_tokens = 0
@@ -75,14 +92,16 @@ def run(
         _announce(step, "Thinking")
         try:
             metrics = llm.get_response(step, messages)
-        except LLMError:
+        except LLMError as e:
+            error = str(e)
             break
+        metrics.llm_output = truncate_output(metrics.llm_output)
         messages.append({"role": "assistant", "content": metrics.llm_output})
         steps.append(metrics)
         total_input_tokens += metrics.input_tokens
         total_output_tokens += metrics.output_tokens
 
-        code, warning = extract_code(metrics.llm_output)
+        code, warning = extract_code(metrics.llm_output, tool_param_types)
         if code is None:
             _announce(step, "Retrying")
             observation = "No valid code block was found in your response."
@@ -92,7 +111,7 @@ def run(
         _announce(step, "Executing")
         metrics.sandbox_input = code
         response = run_code(container, mcp_bridge, code)
-        observation = _format_observation(response)
+        observation = truncate_output(response_text(response))
         if warning is not None:
             observation = f"{warning}\n\n{observation}"
         metrics.sandbox_output = observation
@@ -103,18 +122,4 @@ def run(
             _announce(step, "Done")
             break
 
-    return steps, final_answer
-
-
-def _format_observation(response: dict) -> str:
-    msg_type = response.get("type")
-    if msg_type == "result":
-        return response.get("stdout", "")
-    if msg_type == "error":
-        return response.get("traceback") or (
-            f"{response.get('error_type', 'Error')}: "
-            f"{response.get('message', '')}"
-        )
-    if msg_type == "final_answer":
-        return response.get("answer", "")
-    return repr(response)
+    return steps, final_answer, error
