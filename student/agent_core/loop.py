@@ -10,6 +10,7 @@ from agent_core.parsing import extract_code
 from agent_core.provider import LLM, LLMError
 from agent_core.sandbox_client import run_code
 from agent_core.schemas import StepMetrics
+from mcp_server_shared.share import truncate_output
 from sandbox.container import SandboxContainer
 from sandbox.executor.protocol import response_text
 from sandbox.mcp_bridge import MCPBridge
@@ -94,6 +95,7 @@ def run(
         except LLMError as e:
             error = str(e)
             break
+        metrics.llm_output = truncate_output(metrics.llm_output)
         messages.append({"role": "assistant", "content": metrics.llm_output})
         steps.append(metrics)
         total_input_tokens += metrics.input_tokens
@@ -109,7 +111,7 @@ def run(
         _announce(step, "Executing")
         metrics.sandbox_input = code
         response = run_code(container, mcp_bridge, code)
-        observation = response_text(response)
+        observation = truncate_output(response_text(response))
         if warning is not None:
             observation = f"{warning}\n\n{observation}"
         metrics.sandbox_output = observation

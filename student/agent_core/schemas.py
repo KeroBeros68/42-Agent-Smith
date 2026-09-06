@@ -15,6 +15,7 @@ sandbox itself rather than the evaluation contract).
 """
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -36,7 +37,7 @@ class StepMetrics(BaseModel):
     for steps where a field doesn't apply (e.g., no sandbox execution).
     """
 
-    step: int = Field(..., description="1-indexed iteration number")
+    step: int = Field(..., ge=1, description="1-indexed iteration number")
     input_tokens: int = Field(
         ..., description="Tokens sent to the LLM for this step"
     )
@@ -86,6 +87,16 @@ class StepMetrics(BaseModel):
             "response (0 = first attempt succeeded)"
         ),
     )
+    usage_reported: bool = Field(
+        default=True,
+        description=(
+            "Whether the provider actually reported token usage for "
+            "this step — False means input_tokens/output_tokens are 0 "
+            "because the provider didn't report usage, not because 0 "
+            "tokens were genuinely used. Additive field, not part of "
+            "the moulinette's official contract (ignored on validation)."
+        ),
+    )
 
 
 class SolutionOutput(BaseModel):
@@ -103,7 +114,7 @@ class SolutionOutput(BaseModel):
             "instance_id)"
         ),
     )
-    benchmark: str = Field(
+    benchmark: Literal["mbpp", "swebench"] = Field(
         ...,
         description="Benchmark type: 'mbpp' or 'swebench'",
     )

@@ -71,7 +71,23 @@ def _resolve_json_type(schema: dict[str, Any]) -> str | None:
 
 
 def _describe_tool(tool: Any) -> str:
-    properties = (tool.inputSchema or {}).get("properties", {})
+    schema = tool.inputSchema or {}
+    if "properties" not in schema:
+        # Every real MCP tool observed so far declares an object schema
+        # with "properties" (even {} for a zero-arg tool) — a schema
+        # using $ref/oneOf/anyOf at the top level instead is not something
+        # any of our own tools do, but silently treating it as "zero
+        # parameters" (the previous .get("properties", {}) default) would
+        # render a misleading empty tool_name() signature, indistinguishable
+        # from a genuinely argument-less tool. Surfaced explicitly instead.
+        return (
+            f"- {tool.name}(...)\n"
+            f"  {tool.description}\n"
+            f"  (parameter schema not in the expected object/properties "
+            f"shape — call with keyword arguments per the tool's own "
+            f"description above)"
+        )
+    properties = schema["properties"]
     params = ", ".join(
         f"{name}: {schema.get('type', 'Any')}"
         for name, schema in properties.items()

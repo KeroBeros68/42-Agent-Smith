@@ -15,7 +15,6 @@ from typing import Literal, cast
 
 import docker
 from docker.models.containers import Container
-from dotenv import load_dotenv
 from fastmcp import FastMCP
 from pydantic import ValidationError
 
@@ -29,7 +28,6 @@ class SWEException(Exception):
 
 # --- Server Setup ---
 
-load_dotenv()
 mcp = FastMCP("SWE Bench MCP Server")
 
 # Loaded ONCE at startup from the env var the sandbox sets before

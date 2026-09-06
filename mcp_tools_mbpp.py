@@ -12,13 +12,14 @@ for the Agent Smith project.
     for a subprocess timeout. (>=1)
 """
 
+import ast
 import json
 import os
+import re
 import subprocess
 import sys
 from typing import Literal
 
-from dotenv import load_dotenv
 from fastmcp import FastMCP
 from pydantic import ValidationError
 
@@ -32,7 +33,6 @@ class MBPPException(Exception):
 
 # --- Server Setup ---
 
-load_dotenv()
 mcp = FastMCP("MBPP MCP Server")
 
 # Loaded ONCE at startup from the env var the sandbox sets before
@@ -128,6 +128,24 @@ def run_tests(code: str, test_list: list[str] | None = None) -> str:
             ),
         })
 
+    name_match = re.match(r"\s*def\s+(\w+)", TASK.function_definition)
+    if name_match is not None:
+        expected_name = name_match.group(1)
+        defined_names = {
+            node.name
+            for node in ast.walk(ast.parse(code))
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        if expected_name not in defined_names:
+            return json.dumps({
+                "success": False,
+                "output": truncate_output(
+                    f"Your code does not define a function named "
+                    f"'{expected_name}', as required by the signature "
+                    f"({TASK.function_definition!r}). Define it and retry."
+                ),
+            })
+
     # Indent all lines to put the code inside a try/except
     indented_code = "\n".join("    " + line for line in code.splitlines())
 
@@ -146,6 +164,7 @@ def run_tests(code: str, test_list: list[str] | None = None) -> str:
                 input="",
                 capture_output=True,
                 text=True,
+                env={},
             )
             if proc.returncode != 0:
                 # Test failed. Add details to the error

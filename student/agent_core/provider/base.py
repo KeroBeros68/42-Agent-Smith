@@ -196,6 +196,7 @@ class LLM(AbstractLLM):
             step=step,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            usage_reported=usage is not None,
             request_time_ms=(end_time - start_time) / 1_000_000,
             api_url=llm_gen._hidden_params.get("api_base") or "",
             model_name=self.__model_name,
