@@ -155,6 +155,7 @@ class LLM(AbstractLLM):
         order = self.__deployment_ids[start:] + self.__deployment_ids[:start]
 
         last_error: Exception | None = None
+        retries = 0
         llm_gen: ModelResponse | CustomStreamWrapper | None = None
         for deployment_id in order:
             try:
@@ -166,6 +167,8 @@ class LLM(AbstractLLM):
                 break
             except Exception as e:
                 last_error = e
+                retries += 1
+
         if llm_gen is None:
             raise LLMError(
                 f"LLM call failed for model {self.__model_name!r} after "
