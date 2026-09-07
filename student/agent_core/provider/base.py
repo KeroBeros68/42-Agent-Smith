@@ -205,6 +205,7 @@ class LLM(AbstractLLM):
             api_url=llm_gen._hidden_params.get("api_base") or "",
             model_name=self.__model_name,
             llm_output=llm_gen.choices[0].message.content or "",
+            retries=retries
             # sandbox_input/sandbox_output/retries are unknown at this
             # point (no code has been executed yet) and are left to their
             # StepMetrics defaults; the caller (agent_core.loop) fills
