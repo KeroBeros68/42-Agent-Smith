@@ -157,6 +157,8 @@ class LLM(AbstractLLM):
         last_error: Exception | None = None
         retries = 0
         llm_gen: ModelResponse | CustomStreamWrapper | None = None
+        if len(messages) >= 1 and messages[-1]['role'] != 'user':
+            messages.append({"role": "user", "content": "Go on."})
         for deployment_id in order:
             try:
                 llm_gen = self.__router.completion(
