@@ -7,11 +7,11 @@
 - **Models / providers compared:** (free tiers only)
   | Model | Provider |
   |---|---|
-  | huggingface/Qwen/Qwen3.8-27B | Huggingface |
-  | openrouter/nvidia/nemotron-3-ultra-550b-a55b:free | OpenRouter |
-  | openrouter/minimax/minimax-m3:free | OpenRouter |
-  | openrouter/inclusionai/ling-3.0-flash-fin:free | OpenRouter |
-  | openrouter/minimax/minimax-m2.7:free | OpenRouter |
+  | dots-3-note-preview | OpenRouter · Dots Studio |
+  | gemini-3-flash-preview | Google Gemini |
+  | gemini-3.5-flash-lite | Google Gemini |
+  | ling-3.0-flash-fin | OpenRouter · InclusionAI |
+  | nemotron-3-ultra-550b-a55b | OpenRouter · NVIDIA |
 - **Tested on:**
   - `sympy__sympy-14711`
   - `django__django-15104`
@@ -23,47 +23,59 @@
 
 Grid: 5 models × 3 tasks (each model runs every task).
 
+« Pass/Fail » is the result recorded by the model's own run. « Moulinette » is an independent re-grade with `uv run moulinette_eval validate swebench <task.json> <solution.json>`: correctness (patch applied in a clean SWE-bench container and graded) **and** metrics (iterations ≤ 30, input ≤ 300,000, output ≤ 10,000, time ≤ 900 s). A cell passes only when both steps pass.
+
 ### sympy__sympy-14711
 
-| Model | Pass/Fail | Iterations | Total input tokens | Total output tokens | Wall-clock time |
-|---|---|---|---|---|---|
-| qwen3.8-27b | True | 18 | 188 742 | 6650 | 856 |
-| nemotron-3-ultra-550b-a55b | False | 16 | 305 892 | 2894 | 568 |
-| minimax-m3 | False | 30 | 272 561 | 1715 | 163 |
-| ling-3.0-flash-fin | False | 30 | 69 584 | 994 | 99 |
-| minimax-m2.7 | True | 15 | 45 396 | 2430 | 105 |
+| Model | Pass/Fail | Moulinette | Iterations | Total input tokens | Total output tokens | Wall-clock time |
+|---|---|---|---|---|---|---|
+| dots-3-note-preview | ❌ Fail | ❌ Fail | 11 | 30,284 | 1,678 | 159.5 s |
+| gemini-3-flash-preview | ❌ Fail | ❌ Fail | 1 | 1,624 | 35,003 | 278.3 s |
+| gemini-3.5-flash-lite | ✅ Pass | ✅ Pass | 19 | 80,858 | 1,057 | 53.1 s |
+| ling-3.0-flash-fin | ❌ Fail | ❌ Fail | 30 | 70,494 | 1,298 | 127.0 s |
+| nemotron-3-ultra-550b-a55b | ❌ Fail | ❌ Fail | 15 | 305,743 | 3,299 | 871.3 s |
 
 ### django__django-15104
 
-| Model | Pass/Fail | Iterations | Total input tokens | Total output tokens | Wall-clock time |
-|---|---|---|---|---|---|
-| qwen3.8-27b | True | 8 | 42 971 | 1079 | 115 |
-| nemotron-3-ultra-550b-a55b | True | 8 | 97 638 | 12 906 | 805 |
-| minimax-m3 | True | 6 | 33 816 | 373 | 101 |
-| ling-3.0-flash-fin | False | 30 | 95 476 | 947 | 93 |
-| minimax-m2.7 | True | 9 | 75 560 | 4345 | 78 |
+| Model | Pass/Fail | Moulinette | Iterations | Total input tokens | Total output tokens | Wall-clock time |
+|---|---|---|---|---|---|---|
+| dots-3-note-preview | ❌ Fail | ❌ Fail | 15 | 37,852 | 1,271 | 196.0 s |
+| gemini-3-flash-preview | ❌ Fail | ❌ Fail | 1 | 2,638 | 35,992 | 224.7 s |
+| gemini-3.5-flash-lite | ✅ Pass | ✅ Pass | 7 | 42,501 | 489 | 55.1 s |
+| ling-3.0-flash-fin | ❌ Fail | ❌ Fail | 30 | 102,341 | 1,494 | 131.7 s |
+| nemotron-3-ultra-550b-a55b | ✅ Pass | ❌ Fail | 7 | 61,895 | 9,095 | 526.1 s |
 
 ### pydata__xarray-4629
 
-| Model | Pass/Fail | Iterations | Total input tokens | Total output tokens | Wall-clock time |
-|---|---|---|---|---|---|
-| qwen3.8-27b | True | 5 | 35 440 | 662 | 365 |
-| nemotron-3-ultra-550b-a55b | True | 6 | 40 425 | 1160 | 508 |
-| minimax-m3 | True | 9 | 46 609 | 684 | 340 |
-| ling-3.0-flash-fin | False | 30 | 88 872 | 921 | 269 |
-| minimax-m2.7 | True | 7 | 48 942 | 1119 | 153 |
+| Model | Pass/Fail | Moulinette | Iterations | Total input tokens | Total output tokens | Wall-clock time |
+|---|---|---|---|---|---|---|
+| dots-3-note-preview | ✅ Pass | ✅ Pass | 16 | 103,497 | 2,675 | 453.6 s |
+| gemini-3-flash-preview | ❌ Fail | ❌ Fail | 2 | 11,348 | 74,341 | 493.9 s |
+| gemini-3.5-flash-lite | ✅ Pass | ✅ Pass | 14 | 178,159 | 1,967 | 270.6 s |
+| ling-3.0-flash-fin | ✅ Pass | ✅ Pass | 10 | 58,400 | 1,266 | 349.8 s |
+| nemotron-3-ultra-550b-a55b | ❌ Fail | ❌ Fail | 3 | 15,102 | 10,817 | 583.2 s |
+
+Moulinette failure reasons, per task:
+
+- **dots-3-note-preview** (sympy, django): empty solution — the run was rate-limited and never submitted a patch; metrics valid.
+- **gemini-3-flash-preview** (all): empty solution *and* metrics invalid — a single huge generation (~35–74k output tokens) blows the 10,000-token limit.
+- **ling-3.0-flash-fin** (sympy, django): empty solution — hit the 30-iteration cap without submitting; metrics valid.
+- **nemotron-3-ultra-550b-a55b** (sympy): empty solution; metrics invalid (input 305,743 > 300,000). (xarray): metrics invalid (output 10,817 > 10,000).
+- **nemotron-3-ultra-550b-a55b** (django): the notable mismatch — its trace reports `success`, but the moulinette shows the patch does not apply cleanly in a fresh container → `RESOLVED_NO`.
 
 ## 3. Provider Reliability
 
 | Model | Avg response time / request | Retries | Availability |
 |---|---|---|---|
-| qwen3.8-27b | 29.6 s | 0 | 100% |
-| nemotron-3-ultra-550b-a55b | 44.7 s | 0 | 100% |
-| minimax-m3 | 2.3 s | 0 | 100% |
-| ling-3.0-flash-fin | 1.1 s | 0 | 100% |
-| minimax-m2.7 | 4.1 s | 0 | 100% |
+| dots-3-note-preview | 9.26 s | 252 | 33% |
+| gemini-3-flash-preview | 161.71 s | 2 | 100% |
+| gemini-3.5-flash-lite | 1.50 s | 28 | 100% |
+| ling-3.0-flash-fin | 1.03 s | 0 | 100% |
+| nemotron-3-ultra-550b-a55b | 57.85 s | 9 | 100% |
 
 > Note : We chose providers/models that are specially reliable. The only reiability problems that can be encountered during tests are rate-limit API errors. In this case, the test is cancelled and the error is reported in the results.
+
+> *Availability* = share of the 3 tasks that ran to completion without a provider/rate-limit error. Only `dots-3-note-preview` was affected: the OpenRouter free-tier daily limit cancelled 2 of its 3 tasks (with 252 retries recorded overall).
 
 ## 4. Intermediary Metrics (at least 2)
 
@@ -75,11 +87,11 @@ Step at which the model first reads/edits the file that ends up in its final pat
 
 | Model | sympy-14711 | django-15104 | xarray-4629 |
 |---|---|---|---|
-| qwen3.8-27b | 2 | 3 | 1 |
-| nemotron-3-ultra-550b-a55b | — | 2 | 1 |
-| minimax-m3 | — | 2 | 2 |
-| ling-3.0-flash-fin | — | — | — |
-| minimax-m2.7 | 7 | 1 | 2 |
+| dots-3-note-preview | — | — | 6 |
+| gemini-3-flash-preview | — | — | — |
+| gemini-3.5-flash-lite | 3 | 3 | 2 |
+| ling-3.0-flash-fin | — | — | 1 |
+| nemotron-3-ultra-550b-a55b | — | 2 | — |
 
 ### Submission discipline
 
@@ -87,11 +99,11 @@ Agent iterations between the step where the tests first pass (`run_tests()` show
 
 | Model | sympy-14711 | django-15104 | xarray-4629 |
 |---|---|---|---|
-| qwen3.8-27b | 1 | 1 | 1 |
-| nemotron-3-ultra-550b-a55b | — | 1 | 1 |
-| minimax-m3 | — | 1 | 1 |
-| ling-3.0-flash-fin | — | — | — |
-| minimax-m2.7 | 1 | 2 | 1 |
+| dots-3-note-preview | — | — | 1 |
+| gemini-3-flash-preview | — | — | — |
+| gemini-3.5-flash-lite | 1 | 1 | 5 |
+| ling-3.0-flash-fin | — | — | 2 |
+| nemotron-3-ultra-550b-a55b | — | 0 | — |
 
 The « partial progress » metric (step at which test failures first decrease) was dropped: every run calls `run_tests()` only once, at the end, with no initial failure baseline — so it is not measurable from these traces.
 
@@ -101,32 +113,32 @@ System prompt with worked debugging example vs. bare "solve this bug" prompt, sa
 
 ### Before a bare "solve this bug" prompt
 
-The model navigate through the codebase, reads files, etc. It changes code, executes MCP tools calls, build python code blocs, etc.
+The model run smoothly, even tho different APIs can have rate limits that makes the results look bad.
 
 ### After a bare "solve this bug" prompt
 
-The model doesn't even know it can call tools. No code bloc is writte, nor interpreted. The model fails to complete a single step.
-
-Result: Without proper instructions, the AI model has more difficulties to understand what is its purpose, what are the tools available, etc.
+All models are unable to use a single tool, because they aren't aware of what tool is available. Therefore, they work for nothing.
 
 ## 6. Conclusions
 
 Aggregated over the 3 tasks (every model ran every task). « Avg » means per task. Wall-clock times in seconds.
 
-| Model | Tasks passed | Avg iterations | Avg input tokens | Avg output tokens | Avg wall-clock time | Avg time / iteration |
-|---|---|---|---|---|---|---|
-| qwen3.8-27b | 3 / 3 | 10.3 | 89 051 | 2 797 | 445 s | 43.1 s |
-| nemotron-3-ultra-550b-a55b | 2 / 3 | 10.0 | 147 985 | 5 653 | 627 s | 62.7 s |
-| minimax-m3 | 2 / 3 | 15.0 | 117 662 | 924 | 201 s | 13.4 s |
-| ling-3.0-flash-fin | 0 / 3 | 30.0 | 84 644 | 954 | 154 s | 5.1 s |
-| minimax-m2.7 | 3 / 3 | 10.3 | 56 633 | 2 631 | 112 s | 10.8 s |
+| Model | Tasks passed | Tasks passed (moulinette) | Avg iterations | Avg input tokens | Avg output tokens | Avg wall-clock time | Avg time / iteration |
+|---|---|---|---|---|---|---|---|
+| dots-3-note-preview | 1 / 3 | 1 / 3 | 14.0 | 57,211 | 1,875 | 269.7 s | 18.6 s |
+| gemini-3-flash-preview | 0 / 3 | 0 / 3 | 1.3 | 5,203 | 48,445 | 332.3 s | 250.0 s |
+| gemini-3.5-flash-lite | 3 / 3 | 3 / 3 | 13.3 | 100,506 | 1,171 | 126.3 s | 10.0 s |
+| ling-3.0-flash-fin | 1 / 3 | 1 / 3 | 23.3 | 77,078 | 1,353 | 202.8 s | 14.5 s |
+| nemotron-3-ultra-550b-a55b | 1 / 3 | 0 / 3 | 8.3 | 127,580 | 7,737 | 660.2 s | 109.2 s |
 
 Takeaways:
 
-- Only **qwen3.8-27b** and **minimax-m2.7** solve all 3 tasks. nemotron and minimax-m3 solve 2, ling-3.0-flash-fin solves none — it always exhausts the 30-iteration cap.
-- **minimax-m2.7 is the best overall**: perfect score with the shortest average wall-clock time (112 s) and the lowest token consumption (56.6k input / 2.6k output per task).
-- qwen3.8-27b is equally accurate but roughly 4× slower (445 s/task) and much more input-token-hungry on sympy (188.7k vs 45.4k for m2.7).
-- nemotron-3-ultra-550b-a55b is the most expensive runner: the most input (148k) and output (5.7k) tokens per task and the highest wall-clock time, yet still fails sympy.
-- ling-3.0-flash-fin is cheap and fast per iteration but never converges — it reaches the iteration cap on every run.
+- **gemini-3.5-flash-lite** is the only model the moulinette confirms on all 3 tasks, and does it with the lowest wall-clock time (≈126 s/task) and tiny output (≈1.2k output tokens/task) — it explores through many small `read_file` calls instead of dumping one huge generation.
+- **nemotron-3-ultra-550b-a55b** reports django as passed but is the only model whose self-reported success does **not** survive the moulinette (0/3 verified): its patch fails to apply cleanly in a fresh container → `RESOLVED_NO`. It is also the heaviest and slowest (≈660 s and ≈128k input tokens per task); its sympy run alone burned 305k input tokens and 871 s without converging, and exceeds the input-token limit.
+- **gemini-3-flash-preview** solves nothing (0/3): it emits a single massive response (≈48k output tokens/task, over the 10k limit) and barely runs the sandbox loop (≈1 iteration), so it never reaches a verified `final_answer`.
+- **ling-3.0-flash-fin** hits the iteration cap on both of its failures (30 + 30), spinning without converging.
+- **dots-3-note-preview** is the only model with provider reliability problems: rate-limited on 2 of 3 tasks (the single rate-limit-free run, xarray, is moulinette-verified).
 
-> **Prefered model :**  **minimax-m2.7** (accuracy + speed + cost). **Qwen3.8-27b** is also very good in its outputs, but the fact that its only free provider, HuggingFace, is very restrictive in the usage, makes us prefer to use **minimax-m2.7** as the best free model for these tasks.
+> **Preferred model:** gemini-3.5-flash-lite — the only model whose results are confirmed by the moulinette on all three tasks, while also being the fastest and cheapest.
+
+![42Mulhouse](https://raw.githubusercontent.com/sousampere/sousampere/refs/heads/main/42mulhouse.png)

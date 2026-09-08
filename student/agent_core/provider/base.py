@@ -157,8 +157,8 @@ class LLM(AbstractLLM):
         last_error: Exception | None = None
         retries = 0
         llm_gen: ModelResponse | CustomStreamWrapper | None = None
-        if len(messages) >= 1 and messages[-1]['role'] != 'user':
-            messages.append({"role": "user", "content": "Go on."})
+        # if len(messages) >= 1 and messages[-1]['role'] != 'user':
+        #     messages.append({"role": "user", "content": "Go on."})
         for deployment_id in order:
             try:
                 llm_gen = self.__router.completion(
@@ -166,6 +166,8 @@ class LLM(AbstractLLM):
                     messages=messages,
                     stream=False,
                 )
+                if len(llm_gen.choices[0].message.content == ''):
+                    raise LLMError('LLM generated an empty output.')
                 break
             except Exception as e:
                 last_error = e
