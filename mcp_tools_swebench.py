@@ -88,8 +88,16 @@ def _resolve_within_root(path_str: str) -> tuple[Path, str | None]:
     argument. Returns (resolved_path, None) on success, or
     (resolved_path, error_message) if outside ROOT_DIR — callers check
     the second element and `return` it directly.
+
+    A relative path_str (e.g. ".", "django/db") is resolved against
+    ROOT_DIR, not this process's own cwd — this code runs on the host,
+    outside the container, so the host process's cwd has nothing to do
+    with the repository the model is exploring.
     """
-    path = Path(path_str).resolve()
+    path = Path(path_str)
+    if not path.is_absolute():
+        path = Path(ROOT_DIR) / path
+    path = path.resolve()
     if not path.is_relative_to(ROOT_DIR):
         return path, (
             'Error: you are trying to interact with a file outside your '
