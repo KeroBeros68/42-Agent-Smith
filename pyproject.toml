@@ -33,5 +33,6 @@ packages = [
     "student/agent_mbpp",
     "student/agent_swebench",
     "student/sandbox",
+    "student/mcp_server_shared"
 ]
 

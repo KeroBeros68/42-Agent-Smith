@@ -43,13 +43,17 @@ install:
 	@printf "$(CYAN)[Installation]$(RESET) ➡️  Synchronizing uv\n"
 	uv sync
 
+MYPY_FLAGS=--warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs
+
 lint: install
 	$(PYTHON) -m flake8 $(LINT_CHECK)
-	$(PYTHON) -m -m mypy $(LINT_CHECK) --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs
+	$(PYTHON) -m mypy ./student $(MYPY_FLAGS)
+	$(PYTHON) -m mypy mcp_tools_mbpp.py mcp_tools_swebench.py $(MYPY_FLAGS)
 
 lint-strict: install
 	$(PYTHON) -m flake8 $(LINT_CHECK)
-	$(PYTHON) -m mypy $(LINT_CHECK) --strict
+	$(PYTHON) -m mypy ./student --strict
+	$(PYTHON) -m mypy mcp_tools_mbpp.py mcp_tools_swebench.py --strict
 
 debug: install
 	$(PYTHON) -m pdb -m $(LINT_CHECK)

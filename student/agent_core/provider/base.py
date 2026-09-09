@@ -154,6 +154,7 @@ class LLM(AbstractLLM):
         order = self.__deployment_ids[start:] + self.__deployment_ids[:start]
 
         last_error: Exception | None = None
+        retries = 0
         llm_gen: ModelResponse | CustomStreamWrapper | None = None
         for deployment_id in order:
             try:
@@ -165,6 +166,7 @@ class LLM(AbstractLLM):
                 break
             except Exception as e:
                 last_error = e
+                retries += 1
         if llm_gen is None:
             raise LLMError(
                 f"LLM call failed for model {self.__model_name!r} after "
@@ -201,8 +203,9 @@ class LLM(AbstractLLM):
             api_url=llm_gen._hidden_params.get("api_base") or "",
             model_name=self.__model_name,
             llm_output=llm_gen.choices[0].message.content or "",
-            # sandbox_input/sandbox_output/retries are unknown at this
-            # point (no code has been executed yet) and are left to their
+            retries=retries,
+            # sandbox_input/sandbox_output are unknown at this point (no
+            # code has been executed yet) and are left to their
             # StepMetrics defaults; the caller (agent_core.loop) fills
             # them in once the sandbox has actually run.
         )
