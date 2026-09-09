@@ -7,11 +7,11 @@
 - **Models / providers compared:** (free tiers only)
   | Model | Provider |
   |---|---|
-  | dots-3-note-preview | OpenRouter · Dots Studio |
-  | gemini-3-flash-preview | Google Gemini |
-  | gemini-3.5-flash-lite | Google Gemini |
-  | ling-3.0-flash-fin | OpenRouter · InclusionAI |
-  | nemotron-3-ultra-550b-a55b | OpenRouter · NVIDIA |
+  | openrouter/dots-studio/dots-3-note-preview:free | OpenRouter · Dots Studio |
+  | gemini/gemini-3-flash-preview | Google Gemini |
+  | gemini/gemini-3.5-flash-lite | Google Gemini |
+  | openrouter/inclusionai/ling-3.0-flash-fin:free | OpenRouter · InclusionAI |
+  | openrouter/nvidia/nemotron-3-ultra-550b-a55b:free | OpenRouter · NVIDIA |
 - **Tested on:**
   - `sympy__sympy-14711`
   - `django__django-15104`
