@@ -1,0 +1,3 @@
+OK: small allocation succeeded (1048576 bytes)
+OK: large allocation correctly raised MemoryError
+=== MEMORY TEST COMPLETE ===

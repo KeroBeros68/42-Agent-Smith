@@ -1,0 +1,3 @@
+No task loaded (SWE_TASK_JSON unset) — exploring the repository at TESTBED_PATH. run_tests is unavailable without a task.
+[09/09/26 17:51:58] INFO     Starting MCP server 'SWE Bench MCP transport.py:241
+                             Server' with transport 'stdio'                     

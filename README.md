@@ -117,9 +117,9 @@ task model next to the code that uses it (`agent_mbpp/task.py`, `agent_swebench/
 
 ### 🔌 MCP Protocol (Tools, Resources, Prompts)
 
-The sandbox container is an MCP **client** (`sandbox/mcp_bridge.py`); `mcp_tools_mbpp.py`
-and `mcp_tools_swebench.py` are independent MCP **servers** (built with FastMCP),
-each exposing:
+The host process holds the MCP **client** (`sandbox/mcp_bridge.py`), relaying the
+tool calls sandboxed code makes; `mcp_tools_mbpp.py` and `mcp_tools_swebench.py`
+are independent MCP **servers** (built with FastMCP), each exposing:
 
 - **Tools** — the actions the agent can call from inside the sandbox (e.g.
   `run_tests`, `edit_file`, `search_code`, `get_patch`).
@@ -291,12 +291,12 @@ a genuine `SIGTERM` from the exam harness, converted into a catchable exception
 by `agent_core/shutdown.py` so cleanup still runs before the process dies.
 
 Running two sandbox sessions at once (e.g. one MBPP and one SWE-bench run in
-parallel) is supported safely: every container is stamped with a
-`agent-smith.owner-pid` Docker label at creation, and the MCP server spawned for
-that session receives the same PID via `SANDBOX_OWNER_PID` — so SWE-bench's
-container-discovery tools (which run `docker exec` from outside the sandbox's own
-restrictions) always find *their own* session's container, never another one
-running concurrently.
+parallel) is safe, because no session ever looks for another's container. The
+`agent-smith.owner-pid` label each container carries exists for one purpose:
+letting a starting session reclaim what a *hard-killed* one left behind.
+`with container:` covers every normal exit and even a `SIGTERM`, but `SIGKILL`
+cannot be caught — so a container whose owner PID no longer exists is swept on
+the next start, while a live owner's container is always left alone.
 
 ## 🛠️ Tool Implementation Details
 
@@ -333,19 +333,23 @@ MBPP only needs test execution (§V.3.2). Its pipeline:
 Implementation details:
 
 - All 5 path-taking tools funnel through a single `_resolve_within_root()`
-  helper, which resolves a path against `ROOT_DIR` (`/workspace/testbed`) and
-  rejects anything that escapes it — replacing what used to be 5 separately
-  duplicated guard blocks.
-- Unlike MBPP, execution happens via `container.exec_run(..., environment={...})`
-  directly against the task's own Docker image (which already contains the
-  checked-out repository and its installed dependencies), not a host subprocess.
-  `environment={...}` there always *replaces* rather than *inherits* the
-  environment, so this family was never vulnerable to the same secrets-leak
-  vector fixed on the MBPP side.
-- `run_tests()` explicitly sets `HOME=/workspace` — the image's default
-  `$HOME` (`/home/nonroot`) sits inside the container's own read-only rootfs, so
-  any test step invoking `git config --global` (a real, reproduced failure mode)
-  would otherwise fail with a read-only-filesystem error before a single test runs.
+  helper, which resolves a path against the repository root — relative paths
+  included, so `"."` means the root itself — and rejects anything that escapes
+  it, replacing what used to be 5 separately duplicated guard blocks.
+- The server locates the repository itself and never inspects its caller:
+  `TESTBED_PATH` when set (the isolation mode the evaluation uses), otherwise it
+  extracts the repo out of the task's Docker image into a directory it owns,
+  without ever starting that image. An MCP server that had to find its *client's*
+  container could not be reused by any other agent — and could not work at all in
+  isolation, where no such container exists.
+- Seven of the nine tools therefore run on the server's own filesystem. Only
+  `run_tests` and `run_command` genuinely need Docker — the task's conda
+  environment — and use a disposable container built from the task image, repo
+  bind-mounted at `/testbed`: exactly where the task's eval script and its
+  editable install already look, so neither needs rewriting. It runs as the host
+  uid, so files written through the mount stay usable afterwards, and is created
+  per call and destroyed in a `finally` — a lifetime that never outlives one tool
+  call is what keeps orphans bounded.
 - The task's own `pip install -e .` step (from its eval script) is rewritten via
   regex to add `--no-build-isolation --no-deps`, since the sandbox has no network
   access and the default PEP 517 build step tries to fetch build dependencies
@@ -354,9 +358,14 @@ Implementation details:
 - `get_patch()` runs `git add -A -N` (intent-to-add) before `git diff HEAD`, so
   newly created files show up in the returned patch — without it, only edits to
   already-tracked files were captured.
-- Container discovery (`run_command`/`run_tests`, which use `docker exec`) is
-  scoped by the `agent-smith.owner-pid` label rather than an image-name search,
-  so concurrent sandbox sessions never cross-target each other's container.
+- `run_tests()` resets the git index afterwards (`git reset`, worktree untouched):
+  the eval script's own `git apply`/`git checkout` of the test file leaves a mode
+  change staged against `HEAD`, which `core.fileMode=false` does not suppress, and
+  `get_patch()` reads that same repository.
+- Listing and search results are bounded by entry count, not only by characters.
+  A 50k-character observation costs ~12k input tokens and every later LLM call
+  re-sends it, so a single repo-wide listing can exhaust an entire SWE-bench input
+  budget on its own — measured, on a run that died exactly that way.
 
 ## 🚀 Instructions
 

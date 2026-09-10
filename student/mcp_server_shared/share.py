@@ -18,14 +18,16 @@ class TransportMode(str, Enum):
 # read by mcp_tools_mbpp.py/mcp_tools_swebench.py at import time.
 ENV_MCP_TRANSPORT = "MCP_TRANSPORT"
 ENV_MCP_TIMEOUT_DELAY = "MCP_TIMEOUT_DELAY"
-ENV_SANDBOX_OWNER_PID = "SANDBOX_OWNER_PID"
 ENV_MBPP_TASK_JSON = "MBPP_TASK_JSON"
 ENV_SWE_TASK_JSON = "SWE_TASK_JSON"
 
 
-# Sandbox container identity — shared between container.py (creates and
-# labels containers) and mcp_tools_swebench.py (discovers them from a
-# separate process to run tools via `docker exec`).
+# Sandbox container identity, used by container.py when it creates and
+# tags containers. OWNER_PID_LABEL is informational: it makes our own
+# containers identifiable in `docker ps` when tracking down orphans, and
+# is deliberately no longer a contract between processes — an MCP server
+# that had to find its client's container could not be reused by any
+# other agent (see mcp_tools_swebench.py).
 SANDBOX_UID = 1000
 SANDBOX_GID = 1000
 DERIVED_IMAGE_PREFIX = "sandbox-executor:"

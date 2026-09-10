@@ -1,0 +1,4 @@
+No task loaded (SWE_TASK_JSON unset) — exploring the repository at TESTBED_PATH. run_tests is unavailable without a task.
+[09/09/26 17:51:19] INFO     Starting MCP server 'SWE Bench MCP transport.py:241
+                             Server' with transport 'stdio'                     
+error: could not reach Docker: 404 Client Error for http+docker://localhost/v1.55/images/sandbox-executor:bf7edbd8f61f7af2?force=True&noprune=False: Not Found ("No such image: sandbox-executor:bf7edbd8f61f7af2")

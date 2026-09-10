@@ -1,0 +1,6 @@
+Testing MCP stdio connection...
+Available tools: ['add', 'multiply', 'echo']
+Missing tools: []
+add(5, 7) = addOutput(result='12')
+Tool call successful!
+=== MCP STDIO CONFIG OK ===

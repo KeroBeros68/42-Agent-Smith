@@ -1,7 +1,12 @@
 # Test SWE-bench tools via MCP
-# 
+#
 # Usage (set TESTBED_PATH env var for the MCP server):
 #   TESTBED_PATH=$BASE_MOULINETTE/testbed uv run sandbox --mcp-stdio "python mcp_tools_swebench.py"
+#
+# All paths below are relative ("." / "utils.py") rather than hardcoded
+# to "/testbed" — they resolve against whatever TESTBED_PATH actually is
+# (mcp_tools_swebench.py's _resolve_within_root), so this test works
+# regardless of where the testbed fixture is actually mounted.
 #
 # The testbed directory should contain:
 #   - main.py (imports User, Product, validate_email, calculate_sum)
@@ -47,7 +52,7 @@ else:
     # Test list_files first to check testbed setup
     print()
     print("=== Test list_files ===")
-    test_files = list_files(directory="/testbed", pattern="*.py")
+    test_files = list_files(directory=".", pattern="*.py")
     print(f"list_files result: {test_files}")
     
     testbed_ok = "main.py" in test_files and "utils.py" in test_files and "models.py" in test_files
@@ -66,7 +71,7 @@ else:
         print("=== Test read_file ===")
         
         # Test 1: Read utils.py and verify content
-        result = read_file(filepath="/testbed/utils.py", start_line=1, end_line=10)
+        result = read_file(filepath="utils.py", start_line=1, end_line=10)
         print(f"read_file result: {result[:200]}...")
         
         expected = ["1:", "calculate_sum"]
@@ -116,7 +121,7 @@ else:
         print("=== Test find_references ===")
         
         # Test 5: Find references (subject signature: name, filepath, line)
-        result = find_references(name="calculate_sum", filepath="/testbed/utils.py", line=7)
+        result = find_references(name="calculate_sum", filepath="utils.py", line=7)
         print(f"find_references result: {result[:300]}...")
 
         if "utils.py" in result:
@@ -143,12 +148,12 @@ else:
 
         # Test 7: Edit a file and verify the change
         # First read the current content of utils.py to find a known string
-        original = read_file(filepath="/testbed/utils.py", start_line=1, end_line=5)
+        original = read_file(filepath="utils.py", start_line=1, end_line=5)
         print(f"Before edit: {original[:200]}...")
 
         # Make a non-destructive edit (add a comment at the top)
         edit_result = edit_file(
-            filepath="/testbed/utils.py",
+            filepath="utils.py",
             old_str="def calculate_sum",
             new_str="def calculate_sum"
         )
@@ -166,7 +171,7 @@ else:
 
         # Test 8: Run a simple command
         if 'run_command' in dir():
-            cmd_result = run_command(command="echo hello_from_testbed", workdir="/testbed")
+            cmd_result = run_command(command="echo hello_from_testbed", workdir=".")
             print(f"run_command result: {cmd_result[:200]}...")
 
             if "hello_from_testbed" in str(cmd_result):

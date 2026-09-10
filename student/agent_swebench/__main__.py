@@ -33,6 +33,8 @@ from sandbox.config import SandboxConfig
 from sandbox.mcp_bridge import MCPBridge
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SANDBOX_IMAGE = "agent-smith-sandbox:latest"
+SANDBOX_BUILD_CONTEXT = REPO_ROOT / "student" / "sandbox"
 SANDBOX_TEMPLATE = REPO_ROOT / "sandbox_template.json"
 MCP_SERVER_SCRIPT = REPO_ROOT / "mcp_tools_swebench.py"
 DEFAULT_MAX_ITERATIONS = 30
@@ -53,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent_swebench")
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--model-name", required=True)
+    parser.add_argument("--model-name", default="gemini/gemini-3.5-flash-lite")
     parser.add_argument("--provider-url", default=None)
     parser.add_argument(
         "--max-iterations", type=int, default=DEFAULT_MAX_ITERATIONS
@@ -72,9 +74,15 @@ You work in a loop: Thought, then Code, then Observation.
 - After your code runs, the result is given back to you as the next
   message (Observation).
 
-The repository is checked out at /workspace/testbed. Use the available
-tools to explore it, locate the code responsible for the issue, and
-fix it.
+The repository is already checked out, and the tools operate on it
+directly. You can give paths relative to its root
+("django/db/backends/x.py"); the search tools report absolute paths,
+which you can pass straight back to the other tools.
+
+Start from the issue text: look up the symbols it mentions with
+search_function_or_class_definition_in_code or search_code, then read
+only the file they point to. Do NOT list the whole repository — it holds
+thousands of files and a full listing will exhaust your token budget.
 
 Available tools:
 {tools_doc}
@@ -107,13 +115,14 @@ Code:
 ```python
 print(search_function_or_class_definition_in_code(name="some_function"))
 ```
-Observation: /workspace/testbed/pkg/module.py:42 def some_function(x):
+Observation: /abs/path/pkg/module.py:42 def some_function(x):
 
-Thought: I found it. I will fix the bug.
+Thought: I found it. I will fix the bug (a path relative to the
+repository root works too).
 Code:
 ```python
 print(edit_file(
-    filepath="/workspace/testbed/pkg/module.py",
+    filepath="pkg/module.py",
     old_str="buggy line",
     new_str="fixed line",
 ))
@@ -239,11 +248,13 @@ def main() -> None:
         tool_param_types = manual.extract_param_types(tools)
 
         config = SandboxConfig(**json.loads(SANDBOX_TEMPLATE.read_text()))
-        # Unlike agent_mbpp, the image is task-provided, not built locally
-        # from student/sandbox/Dockerfile — build_context=None means
-        # session.build_container() pulls it if missing (§VII.2).
+        # The same generic sandbox image as agent_mbpp, not the task's own
+        # SWE-bench image: the sandboxed code never touches the repository
+        # (the tool stubs only serialize tool_call messages), so there is
+        # nothing to gain from running it inside a multi-GB task image —
+        # and mcp_tools_swebench.py owns the repository itself now.
         container = session.build_container(
-            config, task.docker_image, None, mcp_bridge
+            config, SANDBOX_IMAGE, SANDBOX_BUILD_CONTEXT, mcp_bridge
         )
         with container:
             system_prompt = build_system_prompt(task, tools_doc)

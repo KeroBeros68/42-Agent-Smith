@@ -18,7 +18,6 @@ from fastmcp.client.transports import StdioTransport
 from mcp_server_shared.share import (
     ENV_MCP_TIMEOUT_DELAY,
     ENV_MCP_TRANSPORT,
-    ENV_SANDBOX_OWNER_PID,
     TransportMode,
 )
 
@@ -64,12 +63,7 @@ class MCPBridge:
                 args=args,
                 env={**os.environ,
                      ENV_MCP_TRANSPORT: TransportMode.STDIO.value,
-                     ENV_MCP_TIMEOUT_DELAY: str(mcp_timeout_delay_sec),
-                     # Same PID that session.build_container() will later
-                     # label the container with — lets a SWE-bench server
-                     # find its own container even with another sandbox
-                     # session running concurrently (see container.py).
-                     ENV_SANDBOX_OWNER_PID: str(os.getpid())},
+                     ENV_MCP_TIMEOUT_DELAY: str(mcp_timeout_delay_sec)},
             )
         if server_url is not None:
             return server_url

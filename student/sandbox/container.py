@@ -13,6 +13,7 @@ Uses docker-py. Responsibilities:
   without swallowing KeyboardInterrupt/SystemExit (§V.2.2)
 """
 
+import contextlib
 import hashlib
 import io
 import json
@@ -23,7 +24,7 @@ from types import TracebackType
 from typing import Any, cast
 
 import docker
-from docker.errors import ImageNotFound
+from docker.errors import DockerException, ImageNotFound
 from docker.models.containers import Container
 
 from mcp_server_shared.share import (
@@ -120,6 +121,44 @@ def _build_executor_image_context(dockerfile: str) -> io.BytesIO:
     return buffer
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Exists, just owned by another user.
+        return True
+    return True
+
+
+def _sweep_orphaned_containers(client: docker.DockerClient) -> None:
+    """Remove sandbox containers whose owning process is gone.
+
+    `with container:` cleans up on every normal exit, and even on a
+    SIGTERM (agent_core/shutdown.py turns it into an exception) — but a
+    SIGKILL cannot be caught, so a hard-killed session leaves its
+    container running forever and nothing ever reclaims it. Observed for
+    real: three orphans accumulated across exam runs, one per run, left
+    by a test that deliberately kills the process.
+
+    The owner-pid label is what makes them identifiable, and a dead owner
+    is what makes them unambiguously safe to remove. A recycled PID makes
+    us skip a container that is in fact orphaned — conservative, and a
+    later run will sweep it. Images are deliberately left alone: the
+    derived image tag is shared between sessions, so removing it here
+    could pull the rug from under a concurrent run.
+    """
+    for container in client.containers.list(
+        all=True, filters={"label": OWNER_PID_LABEL}
+    ):
+        pid = container.labels.get(OWNER_PID_LABEL, "")
+        if not pid.isdigit() or _pid_alive(int(pid)):
+            continue
+        with contextlib.suppress(DockerException):
+            container.remove(force=True)
+
+
 class SandboxContainer:
     def __init__(
         self,
@@ -175,6 +214,7 @@ class SandboxContainer:
         return tag
 
     def start(self) -> None:
+        _sweep_orphaned_containers(self._client)
         self._ensure_image()
         assert self._runtime_image is not None
         container = self._client.containers.create(
@@ -194,13 +234,10 @@ class SandboxContainer:
                 ENV_SANDBOX_CONFIG_JSON: self._config.model_dump_json(),
                 ENV_MCP_TOOLS_JSON: json.dumps(self._tools),
             },
-            # Lets mcp_tools_swebench.py's _find_sandbox_container()
-            # target the container that belongs to *this* CLI process,
-            # not just the first sandbox-executor:* image it finds —
-            # ambiguous (and observed to silently hit the wrong
-            # container) with two sessions running at once, since
-            # MCPBridge only knows this PID, not a container ID (the
-            # container doesn't exist yet when it connects).
+            # Identifies the containers belonging to this process, which
+            # is what lets _sweep_orphaned_containers() above reclaim
+            # those left behind by a hard-killed session. Informational
+            # only — no other process reads it.
             labels={OWNER_PID_LABEL: str(os.getpid())},
         )
         container.start()

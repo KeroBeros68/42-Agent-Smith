@@ -53,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent_mbpp")
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--model-name", required=True)
+    parser.add_argument("--model-name", default="gemini/gemini-3.5-flash-lite")
     parser.add_argument("--provider-url", default=None)
     parser.add_argument(
         "--max-iterations", type=int, default=DEFAULT_MAX_ITERATIONS

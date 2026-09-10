@@ -1,0 +1,6 @@
+Testing MCP HTTP connection...
+Available tools: ['add', 'multiply', 'echo']
+Missing tools: []
+add(2, 3) = addOutput(result='5')
+Tool call successful!
+=== MCP HTTP CONFIG OK ===

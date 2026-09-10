@@ -1,0 +1,11 @@
+/home/kero/Workflow/agent_smith/.venv/lib/python3.10/site-packages/pydantic_settings/sources/utils.py:47: IncompleteFieldDefinitionWarning: Field 'lifespan' has an incomplete definition: its annotation contains an unresolved forward reference, so settings sources may fail to correctly resolve its value. Call `model_rebuild()` on the model where the field is defined, once all the referenced types are defined.
+  warnings.warn(
+[09/09/26 22:57:55] INFO     Processing request of type            server.py:733
+                             ListToolsRequest                                   
+[09/09/26 22:57:59] INFO     Processing request of type            server.py:733
+                             CallToolRequest                                    
+                    INFO     Processing request of type            server.py:733
+                             CallToolRequest                                    
+                    INFO     Processing request of type            server.py:733
+                             CallToolRequest                                    
+error: could not reach Docker: 404 Client Error for http+docker://localhost/v1.55/images/sandbox-executor:bf7edbd8f61f7af2?force=True&noprune=False: Not Found ("No such image: sandbox-executor:bf7edbd8f61f7af2")

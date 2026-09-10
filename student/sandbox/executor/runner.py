@@ -12,6 +12,7 @@ timeout to watchdog.py.
 import io
 import json
 import os
+import resource
 import sys
 import traceback
 from contextlib import redirect_stdout
@@ -28,6 +29,8 @@ MAX_EXECUTION_TIME_SECONDS = SANDBOX_CONFIG.get(
     "max_execution_time_seconds", 10
 )
 TOOLS = json.loads(os.environ.get(protocol.ENV_MCP_TOOLS_JSON, "{}"))
+
+_MAX_MEMORY_MB = SANDBOX_CONFIG.get("max_memory_mb")
 
 # _handle_exec wraps user code in redirect_stdout(buffer) to capture print()
 # output. A tool stub's own protocol message must bypass that and reach the
@@ -115,6 +118,15 @@ def _handle_exec(message: protocol.ExecMessage) -> ExecResponse:
 
 
 def main() -> None:
+    if _MAX_MEMORY_MB is not None:
+        # A soft, in-process limit set below Docker's hard `mem_limit`
+        # cgroup limit (container.py), so Python's own allocator raises a
+        # catchable MemoryError before the kernel's OOM killer SIGKILLs
+        # the whole container — the two aren't equivalent: a container
+        # OOM-kill isn't observable/recoverable from inside exec(), it
+        # just drops the connection with no error message at all.
+        soft_bytes = int(_MAX_MEMORY_MB * 0.9 * 1024 * 1024)
+        resource.setrlimit(resource.RLIMIT_AS, (soft_bytes, soft_bytes))
     restrictions.install(SANDBOX_CONFIG.get("authorized_imports", []))
     NAMESPACE["__builtins__"] = restrictions.restricted_builtins(
         SANDBOX_CONFIG.get("allowed_directories", [])

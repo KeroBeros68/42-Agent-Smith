@@ -159,13 +159,24 @@ run_test "network_blocked" \
     "=== .* COMPLETE ==="
 
 # Test 6: MBPP tools via MCP
+# Generate a real task rather than relying on .env already holding one —
+# a stale/malformed MBPP_TASK_JSON there previously broke `source "$ENV_FILE"`
+# above, since it's raw JSON, not shell-safe.
+MBPP_TASK_TMP="$(mktemp)"
+(cd "$MOULINETTE_PATH" && uv run moulinette_eval dump mbpp --output "$MBPP_TASK_TMP") > /dev/null 2>&1
+export MBPP_TASK_JSON="$(cat "$MBPP_TASK_TMP")"
+rm -f "$MBPP_TASK_TMP"
 run_test "mbpp_tools" \
-    "cat '$TESTS_PATH/test_mbpp_tools.py' | uv run sandbox '$SANDBOX_CONFIG' --mcp-stdio 'python mcp_tools_mbpp.py'" \
+    "cat '$TESTS_PATH/test_mbpp_tools.py' | uv run sandbox '$SANDBOX_CONFIG' --mcp-stdio 'python ../mcp_tools_mbpp.py'" \
     "=== .* OK ==="
 
-# Test 7: SWE-bench tools via MCP (with testbed directory)
-# Init a temporary git repo in the testbed so get_patch works in isolation
-# (in real evaluation, the testbed is a separate Docker container with its own repo)
+# Test 7: SWE-bench tools via MCP, in isolation
+# No SWE_TASK_JSON on purpose: this is the isolation mode §V.4 describes —
+# TESTBED_PATH points the MCP server at a repository, and no task (hence no
+# task image, no container) is involved. run_tests reports itself
+# unavailable in that mode, which is what the test expects.
+# Init a temporary git repo in the testbed so get_patch has something to
+# diff against.
 export TESTBED_PATH="$TESTS_PATH/testbed"
 # Clean up any leftover .git from a previous run
 rm -rf "$TESTBED_PATH/.git" 2>/dev/null || true
@@ -173,7 +184,7 @@ git init "$TESTBED_PATH" > /dev/null 2>&1
 git -C "$TESTBED_PATH" add -A > /dev/null 2>&1
 git -C "$TESTBED_PATH" commit -m "init" > /dev/null 2>&1
 run_test "swebench_tools" \
-    "cat '$TESTS_PATH/test_swebench_tools.py' | uv run sandbox '$SANDBOX_CONFIG_SWEBENCH' --mcp-stdio 'python mcp_tools_swebench.py'" \
+    "cat '$TESTS_PATH/test_swebench_tools.py' | uv run sandbox '$SANDBOX_CONFIG_SWEBENCH' --mcp-stdio 'python ../mcp_tools_swebench.py'" \
     "=== .* OK ==="
 # Clean up temporary git repo
 rm -rf "$TESTBED_PATH/.git" 2>/dev/null || true
@@ -185,8 +196,17 @@ mkdir -p "$TEST_DIR_HTTP"
 echo -e "${YELLOW}Running: MCP HTTP Connection${NC}"
 uv run --directory "$MOULINETTE_PATH" python "$TESTS_PATH/simple_mcp_server.py" --http --port 18080 > "$TEST_DIR_HTTP/server.log" 2>&1 &
 MCP_PID=$!
-sleep 2  # Give HTTP server time to start
-cat "$TESTS_PATH/test_mcp_http.py" | timeout 15 uv run sandbox "$SANDBOX_CONFIG" --mcp-server http://localhost:18080/mcp \
+# Poll the port instead of a fixed sleep — `uv run` startup time (lockfile
+# resolution, venv sync) is variable and a fixed sleep can fire before the
+# server is actually listening, causing a spurious connection failure.
+for _ in $(seq 1 20); do
+    if (exec 3<>/dev/tcp/localhost/18080) 2>/dev/null; then
+        exec 3>&- 3<&-
+        break
+    fi
+    sleep 0.5
+done
+cat "$TESTS_PATH/test_mcp_http.py" | timeout 60 uv run sandbox "$SANDBOX_CONFIG" --mcp-server http://localhost:18080/mcp \
     > "$TEST_DIR_HTTP/stdout.log" 2> "$TEST_DIR_HTTP/stderr.log" || true
 kill $MCP_PID 2>/dev/null || true
 if grep -q "=== .* OK ===" "$TEST_DIR_HTTP/stdout.log" "$TEST_DIR_HTTP/stderr.log" 2>/dev/null; then

@@ -1,0 +1,7 @@
+OK: os blocked
+OK: subprocess blocked
+FAIL: sys imported
+OK: socket blocked
+FAIL: importlib imported
+FAIL: builtins imported
+=== BLOCKED IMPORTS TEST COMPLETE ===

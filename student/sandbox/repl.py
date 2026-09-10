@@ -6,19 +6,17 @@ container.py, prints the result/error, exits cleanly on `exit` or EOF
 """
 
 import codeop
+import sys
 
 from sandbox.container import SandboxContainer
 from sandbox.executor.protocol import MsgType, response_text
 from sandbox.mcp_bridge import MCPBridge
 from sandbox.session import relay_tool_calls
 
-PRIMARY_PROMPT = ">>> "
-CONTINUATION_PROMPT = "... "
-
 
 def _read_block() -> str | None:
     lines: list[str] = []
-    prompt = PRIMARY_PROMPT
+    prompt = ">>>"
     while True:
         try:
             line = input(prompt)
@@ -27,7 +25,7 @@ def _read_block() -> str | None:
         except KeyboardInterrupt:
             print()
             lines = []
-            prompt = PRIMARY_PROMPT
+            prompt = ">>>"
             continue
 
         lines.append(line)
@@ -38,7 +36,7 @@ def _read_block() -> str | None:
             return source
         if code is not None:
             return source
-        prompt = CONTINUATION_PROMPT
+        prompt = "..."
 
 
 def _format_response(response: dict) -> str:
@@ -59,6 +57,24 @@ def _format_response(response: dict) -> str:
 def run(
     container: SandboxContainer, mcp_bridge: MCPBridge | None = None
 ) -> None:
+    if not sys.stdin.isatty():
+        # Piped input (e.g. `cat script.py | uv run sandbox`) is a whole
+        # program, not a human typing interactively — _read_block()'s
+        # blank-line-terminates-a-block REPL semantics (codeop.compile_command,
+        # "single" mode) misfire on a file with blank lines *inside* a
+        # still-open block (normal Python style), splitting it into
+        # fragments and executing them out of context. Run it as one
+        # single exec instead, matching `python -` on a piped script.
+        source = sys.stdin.read()
+        if source.strip() and source.strip() != "exit":
+            try:
+                container.send({"type": MsgType.EXEC, "code": source})
+                response = relay_tool_calls(container, mcp_bridge)
+                print(_format_response(response), end="")
+            except (ConnectionError, TimeoutError):
+                print("Connection to container lost.")
+        return
+
     while True:
         source = _read_block()
         if source is None:

@@ -134,7 +134,10 @@ def run_tests(code: str, test_list: list[str] | None = None) -> str:
             ),
         })
 
-    name_match = re.match(r"\s*def\s+(\w+)", TASK.function_definition)
+    name_match = (
+        None if test_list
+        else re.match(r"\s*def\s+(\w+)", TASK.function_definition)
+    )
     if name_match is not None:
         expected_name = name_match.group(1)
         defined_names = {

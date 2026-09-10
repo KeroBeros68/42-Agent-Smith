@@ -1,0 +1,7 @@
+math imported: 4.0
+json imported: {"a": 1}
+re imported: <re.Match object; span=(0, 3), match='123'>
+collections imported: Counter({1: 2, 2: 1})
+itertools imported: [0, 1, 2]
+
+=== ALL ALLOWED IMPORTS OK ===

@@ -1,0 +1,33 @@
+warning: `VIRTUAL_ENV=/home/kero/Workflow/agent_smith/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+INFO:     Started server process [1694556]
+INFO:     Waiting for application startup.
+[09/09/26 17:52:17] INFO     StreamableHTTP       streamable_http_manager.py:116
+                             session manager                                    
+                             started                                            
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://localhost:18080 (Press CTRL+C to quit)
+[09/09/26 17:52:21] INFO     Created new          streamable_http_manager.py:240
+                             transport with                                     
+                             session ID:                                        
+                             c161a688112c4a4caee2                               
+                             5a85748398e5                                       
+INFO:     127.0.0.1:34202 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34230 - "GET /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34218 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:34236 - "POST /mcp HTTP/1.1" 200 OK
+                    INFO     Processing request of type            server.py:720
+                             ListToolsRequest                                   
+INFO:     127.0.0.1:34242 - "POST /mcp HTTP/1.1" 200 OK
+[09/09/26 17:52:26] INFO     Processing request of type            server.py:720
+                             CallToolRequest                                    
+[09/09/26 17:52:37] INFO     Terminating session:         streamable_http.py:779
+                             c161a688112c4a4caee25a857483                       
+                             98e5                                               
+INFO:     127.0.0.1:46584 - "DELETE /mcp HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+[09/09/26 17:52:38] INFO     StreamableHTTP       streamable_http_manager.py:120
+                             session manager                                    
+                             shutting down                                      
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1694556]

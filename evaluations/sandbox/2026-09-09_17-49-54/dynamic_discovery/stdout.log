@@ -1,0 +1,15 @@
+Testing dynamic MCP tool discovery...
+
+=== Tool Discovery ===
+OK: 'add' discovered from MCP server
+OK: 'multiply' discovered from MCP server
+OK: 'echo' discovered from MCP server
+
+Discovered: 3/3 tools
+
+=== Tool Invocation ===
+OK: add(3, 4) = addOutput(result='7')
+OK: multiply(6, 7) = multiplyOutput(result='42')
+OK: echo('test_message') = echoOutput(result='Echo: test_message')
+
+=== DYNAMIC DISCOVERY OK ===

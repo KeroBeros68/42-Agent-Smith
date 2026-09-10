@@ -1,0 +1,10 @@
+Testing run_tests tool via MCP...
+Result: {"success": true, "output": "All test passed successfully !"}
+
+=== MBPP TOOLS OK ===
+
+Testing final_answer tool...
+final_answer raised: def add(a, b): return a + b
+OK: final_answer is callable (raised expected error)
+
+=== MBPP TOOLS OK ===

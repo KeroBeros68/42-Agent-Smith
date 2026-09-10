@@ -1,0 +1,32 @@
+INFO:     Started server process [1693895]
+INFO:     Waiting for application startup.
+[09/09/26 17:51:40] INFO     StreamableHTTP       streamable_http_manager.py:116
+                             session manager                                    
+                             started                                            
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://localhost:18080 (Press CTRL+C to quit)
+[09/09/26 17:51:44] INFO     Created new          streamable_http_manager.py:240
+                             transport with                                     
+                             session ID:                                        
+                             7fb108937757457ca915                               
+                             2f7e77391043                                       
+INFO:     127.0.0.1:49346 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49366 - "GET /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49356 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     127.0.0.1:49370 - "POST /mcp HTTP/1.1" 200 OK
+                    INFO     Processing request of type            server.py:720
+                             ListToolsRequest                                   
+INFO:     127.0.0.1:49378 - "POST /mcp HTTP/1.1" 200 OK
+[09/09/26 17:51:48] INFO     Processing request of type            server.py:720
+                             CallToolRequest                                    
+[09/09/26 17:52:00] INFO     Terminating session:         streamable_http.py:779
+                             7fb108937757457ca9152f7e7739                       
+                             1043                                               
+INFO:     127.0.0.1:50252 - "DELETE /mcp HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+                    INFO     StreamableHTTP       streamable_http_manager.py:120
+                             session manager                                    
+                             shutting down                                      
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1693895]

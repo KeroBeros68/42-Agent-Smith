@@ -87,7 +87,7 @@ def install(authorized_imports: Sequence[str]) -> None:
 SAFE_BUILTINS = (
     "abs", "all", "any", "ascii", "bin", "bool", "bytearray", "bytes",
     "callable", "chr", "classmethod", "complex", "delattr", "dict",
-    "divmod", "enumerate", "filter", "float", "format", "frozenset",
+    "dir", "divmod", "enumerate", "filter", "float", "format", "frozenset",
     "getattr", "hasattr", "hash", "hex", "id", "int", "isinstance",
     "issubclass", "iter", "len", "list", "map", "max", "min", "next",
     "object", "oct", "ord", "pow", "print", "property", "range",

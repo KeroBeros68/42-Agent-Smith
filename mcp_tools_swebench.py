@@ -5,28 +5,32 @@ It contains useful tools that can be used in the agentic loop
 for the Agent Smith project.
 """
 
+import atexit
 import base64
+import contextlib
 import json
 import os
 import re
+import shutil
+import subprocess
+import tarfile
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 import sys
 from typing import Literal, cast
 
 import docker
+from docker.errors import ImageNotFound
 from docker.models.containers import Container
 from fastmcp import FastMCP
 from pydantic import ValidationError
 
 from student.agent_swebench.task import SWEBenchTaskInput
 from student.mcp_server_shared.share import (
-    DERIVED_IMAGE_PREFIX,
     ENV_MCP_TIMEOUT_DELAY,
     ENV_MCP_TRANSPORT,
-    ENV_SANDBOX_OWNER_PID,
     ENV_SWE_TASK_JSON,
-    OWNER_PID_LABEL,
-    SANDBOX_UID,
     TransportMode,
     truncate_output,
 )
@@ -61,167 +65,258 @@ except ValueError:
     exit(1)
 
 
+_TESTBED_PATH_ENV = os.environ.get('TESTBED_PATH')
+
 if TASK is None:
+    if not _TESTBED_PATH_ENV:
+        print(
+            "Could not load the task. Please restart the MCP server with "
+            f"a valid SWEBenchTaskInput in the {ENV_SWE_TASK_JSON} env "
+            "variable, or point TESTBED_PATH at a repository.",
+            file=sys.stderr,
+        )
+        exit(1)
     print(
-        "Could not load the task. Please restart "
-        "the MCP server with a valid SWEBenchTaskInput in the "
-        f"{ENV_SWE_TASK_JSON} env variable.",
+        f"No task loaded ({ENV_SWE_TASK_JSON} unset) — exploring the "
+        "repository at TESTBED_PATH. run_tests is unavailable without a "
+        "task.",
         file=sys.stderr,
     )
-    exit(1)
 
 
-# Root of the codebase the MCP server is allowed to explore. Normally a
-# writable copy of /testbed (see _ensure_workspace_repo) — /testbed
-# itself is part of the sandbox container's read-only rootfs (§V.2.3).
-# TESTBED_PATH overrides this when the moulinette tests these tools in
-# isolation (§V.4, subject v1.2): it sets that exact env var to the repo
-# root before starting this server, without necessarily going through
-# our own docker-exec/container-discovery architecture — read here so
-# an isolated test doesn't silently look in the wrong place.
-ROOT_DIR = os.environ.get('TESTBED_PATH', '/workspace/testbed')
+# The path the SWE-bench task image checks the repository out at, and
+# the path its own eval_script targets internally.
+_TESTBED_IN_IMAGE = '/testbed'
+
+# Where the repository actually lives, from this server's point of view.
+#
+# §V.4 (sujet v1.2): the moulinette sets TESTBED_PATH to the repository
+# root before starting this server when it tests these tools in
+# isolation — so when that variable is set, it *is* the repository.
+# Otherwise the repo only exists inside the task's image, and we extract
+# a copy we own.
+#
+# Deliberately says nothing about the caller: an MCP server has no
+# business knowing whether its client runs in a Docker sandbox. Reaching
+# into the client's container (the previous design) made this server
+# unusable by any other agent — and unusable in isolation, where no such
+# container exists at all.
+_materialized_root: str | None = None
 
 
-def _resolve_within_root(path_str: str) -> tuple[Path, str | None]:
-    """Resolve path_str and check it's inside ROOT_DIR — the guard
-    duplicated identically across every tool taking a filesystem path
-    argument. Returns (resolved_path, None) on success, or
-    (resolved_path, error_message) if outside ROOT_DIR — callers check
-    the second element and `return` it directly.
+def _ensure_task_image(client: docker.DockerClient, image: str) -> None:
+    """Pull the task image if it isn't present locally.
 
-    A relative path_str (e.g. ".", "django/db") is resolved against
-    ROOT_DIR, not this process's own cwd — this code runs on the host,
-    outside the container, so the host process's cwd has nothing to do
-    with the repository the model is exploring.
+    Nothing else pulls it any more: the sandbox runs the generic image
+    now, so this server is the only thing that needs the task's own.
     """
-    path = Path(path_str)
-    if not path.is_absolute():
-        path = Path(ROOT_DIR) / path
-    path = path.resolve()
-    if not path.is_relative_to(ROOT_DIR):
-        return path, (
-            'Error: you are trying to interact with a file outside your '
-            f'allowed directory ({ROOT_DIR})'
+    try:
+        client.images.get(image)
+    except ImageNotFound:
+        client.images.pull(image)
+
+
+def _materialize_repo() -> str:
+    """Extract the task image's /testbed into a directory we own.
+
+    The image is created but never started, so no task code runs here —
+    this is a file copy, not an execution. Measured at ~10-16s for
+    161 MB on django__django-15851.
+    """
+    if TASK is None:
+        raise SWEException(
+            "No repository available: this server was started without "
+            f"TESTBED_PATH and without a task ({ENV_SWE_TASK_JSON}), so "
+            "there is nothing to explore."
         )
-    return path, None
-
-
-def _find_sandbox_container() -> Container:
-    """Find the running sandbox container for this session.
-
-    MCP tools run outside the sandbox's execution restrictions (§V.2.5),
-    but for SWE-bench the actual repository only exists inside that
-    container's filesystem. Matched by image tag prefix, and — when
-    SANDBOX_OWNER_PID is set (mcp_bridge.py sets it for every spawn) —
-    also by the matching Docker label container.py stamps the container
-    with at creation. The PID check is what actually disambiguates:
-    found for real that two sandbox sessions running at once (e.g. an
-    MBPP run alongside a SWE-bench one) made this silently return
-    whichever container happened to be first in Docker's listing —
-    including one with no /testbed at all, breaking every SWE-bench
-    tool with a confusing "Could not prepare a writable copy" error
-    that had nothing to do with the actual command being run.
-    """
+    dest = tempfile.mkdtemp(prefix='agent-smith-testbed-')
     client = docker.from_env()
-    owner_pid = os.environ.get(ENV_SANDBOX_OWNER_PID)
-    candidates = []
-    for container in client.containers.list():
-        image = container.image
-        if image is None:
-            continue
-        tags = image.tags or []
-        if not any(tag.startswith(DERIVED_IMAGE_PREFIX) for tag in tags):
-            continue
-        if owner_pid is not None:
-            if container.labels.get(OWNER_PID_LABEL) == owner_pid:
-                return container
-            continue
-        candidates.append(container)
-    if owner_pid is not None:
-        raise SWEException(
-            "No running sandbox container found for this session "
-            f"(owner PID {owner_pid}) — is the sandbox started?"
-        )
-    if len(candidates) > 1:
-        raise SWEException(
-            "Multiple sandbox containers found and none tagged for this "
-            "session — cannot disambiguate."
-        )
-    if candidates:
-        return candidates[0]
-    raise SWEException(
-        "No running sandbox container found — is the sandbox started?"
-    )
+    _ensure_task_image(client, TASK.docker_image)
+    container = client.containers.create(TASK.docker_image, command='true')
+    try:
+        stream, _ = container.get_archive(_TESTBED_IN_IMAGE)
+        with tempfile.TemporaryFile() as buffer:
+            for chunk in stream:
+                buffer.write(chunk)
+            buffer.seek(0)
+            with tarfile.open(fileobj=buffer) as tar:
+                # The archive comes from a task image we are about to run
+                # tests from anyway, but an absolute or ../ member would
+                # write outside dest — refuse those rather than trust it.
+                members = [
+                    m for m in tar.getmembers()
+                    if not m.name.startswith('/')
+                    and '..' not in Path(m.name).parts
+                ]
+                tar.extractall(dest, members=members)
+    finally:
+        container.remove(force=True)
+    # get_archive('/testbed') yields entries prefixed with 'testbed/'.
+    return str(Path(dest) / Path(_TESTBED_IN_IMAGE).name)
 
 
-def _exec(
-    container: Container,
-    cmd: list[str],
+def _repo_root() -> str:
+    """Absolute path to the repository, materializing it on first use."""
+    global _materialized_root
+    if _TESTBED_PATH_ENV:
+        return _TESTBED_PATH_ENV
+    if _materialized_root is None:
+        _materialized_root = _materialize_repo()
+    return _materialized_root
+
+
+@atexit.register
+def _cleanup_materialized_repo() -> None:
+    # Only ever removes a directory we created ourselves — a
+    # caller-provided TESTBED_PATH is never touched.
+    if _materialized_root is not None:
+        shutil.rmtree(Path(_materialized_root).parent, ignore_errors=True)
+
+
+def _run(
+    argv: list[str],
     workdir: str | None = None,
     env: dict[str, str] | None = None,
 ) -> tuple[str, str, int]:
-    """Run a command inside the sandbox container, argv-style (no shell
-    interpolation — arguments are never string-concatenated into a shell
-    command, avoiding injection)."""
-    # user="1000" (numeric, not "sandbox"): the container drops
-    # cap_drop=["ALL"] (including DAC_OVERRIDE), so even the default root
-    # exec user can't bypass file permissions — /workspace is tmpfs
-    # mounted uid=1000, found by testing (root got "Permission denied" on
-    # both list and write). The name "sandbox" only exists in our own
-    # MBPP Dockerfile's /etc/passwd — a task-provided SWE-bench image has
-    # no such entry ("unable to find user sandbox"), so the numeric UID
-    # is used instead, which Docker accepts without a passwd lookup.
+    """Run a command against the repository, argv-style (no shell
+    interpolation — arguments are never concatenated into a shell string,
+    avoiding injection)."""
+    result = subprocess.run(
+        argv,
+        cwd=workdir,
+        env={**os.environ, **env} if env else None,
+        capture_output=True,
+        text=True,
+        errors='replace',
+        # Never let a child inherit this server's stdin: on the stdio
+        # transport that pipe carries the MCP protocol itself, so a
+        # command that reads stdin (run_command with a bare `cat`, say)
+        # would either steal protocol bytes or hang forever.
+        stdin=subprocess.DEVNULL,
+    )
+    return result.stdout, result.stderr, result.returncode
+
+
+@contextlib.contextmanager
+def _task_container() -> Iterator[Container]:
+    """A disposable container from the task image, repo bind-mounted.
+
+    Created per call and removed in the finally: a lifetime that never
+    outlives a single tool call means a crash can leave at most one
+    container behind, itself bounded by the tool's own timeout. §V.4
+    makes cleanup our responsibility and the evaluation checks for
+    orphans, so a long-lived cached container is not worth the seconds
+    it would save.
+
+    Mounted at /testbed — the exact path the eval_script and the image's
+    editable install already target, so neither needs rewriting. Runs as
+    the host uid: verified that running as root instead leaves hundreds
+    of root-owned files (__pycache__ and friends) in the repo through the
+    mount, breaking every later host-side edit.
+    """
+    if TASK is None:
+        raise SWEException(
+            'Could not start a task container: no task was loaded '
+            f'({ENV_SWE_TASK_JSON} is unset). This is a server-side '
+            'problem.'
+        )
+    client = docker.from_env()
+    _ensure_task_image(client, TASK.docker_image)
+    root = _repo_root()
+    # Mounted at /testbed because that is what the eval_script and the
+    # image's editable install target, and *also* at its host path
+    # because the search tools hand the agent host paths that it then
+    # passes back to run_command — both must resolve inside.
+    mounts = [
+        docker.types.Mount(target=_TESTBED_IN_IMAGE, source=root, type='bind')
+    ]
+    if root != _TESTBED_IN_IMAGE:
+        mounts.append(
+            docker.types.Mount(target=root, source=root, type='bind')
+        )
+    container = client.containers.create(
+        TASK.docker_image,
+        command=['sleep', 'infinity'],
+        network_mode='none',
+        working_dir=_TESTBED_IN_IMAGE,
+        user=f'{os.getuid()}:{os.getgid()}',
+        mounts=mounts,
+    )
+    try:
+        container.start()
+        yield container
+    finally:
+        container.remove(force=True)
+
+
+def _exec_in(
+    container: Container,
+    argv: list[str],
+    workdir: str | None = None,
+    env: dict[str, str] | None = None,
+) -> tuple[str, str, int]:
+    """Run a command inside a task container (see _task_container)."""
     result = container.exec_run(
-        cmd, workdir=workdir, demux=True,
-        user=str(SANDBOX_UID), environment=env,
+        argv, workdir=workdir, demux=True, environment=env
     )
-    # The docker-stubs type for .output is too loose (bytes | Iterator[bytes]
-    # — it doesn't model demux=True specifically), but demux=True guarantees
-    # a (stdout, stderr) tuple at runtime, and leaving stream/socket at their
-    # default False guarantees a real exit_code (per docker-py's own
-    # docstring: both are None only when stream or socket is True).
     if result.exit_code is None:
-        raise SWEException("exec_run returned no exit code (unexpected).")
-    stdout, stderr = cast(
-        "tuple[bytes | None, bytes | None]", result.output
-    )
+        raise SWEException('exec_run returned no exit code (unexpected).')
+    stdout, stderr = cast('tuple[bytes | None, bytes | None]', result.output)
     return (
-        (stdout or b"").decode("utf-8", errors="replace"),
-        (stderr or b"").decode("utf-8", errors="replace"),
+        (stdout or b'').decode('utf-8', errors='replace'),
+        (stderr or b'').decode('utf-8', errors='replace'),
         result.exit_code,
     )
 
 
-def _ensure_workspace_repo(container: Container) -> None:
-    """Copy /testbed to a writable location, once per container.
+def _resolve_within_root(path_str: str) -> tuple[Path, str | None]:
+    """Resolve path_str and check it's inside the repository root — the
+    guard duplicated identically across every tool taking a filesystem
+    path argument. Returns (resolved_path, None) on success, or
+    (resolved_path, error_message) if outside it — callers check the
+    second element and `return` it directly.
 
-    /testbed is part of the container's read-only rootfs (§V.2.3) — only
-    /workspace and /tmp are writable (tmpfs, see sandbox/container.py).
-    edit_file/run_tests need to write into the repo, so tools operate on
-    this writable copy instead of the original.
+    A relative path_str (e.g. ".", "django/db") resolves against the
+    repository root, not this process's cwd. The root is resolved too: a
+    caller-provided TESTBED_PATH may be relative or go through symlinks,
+    and comparing a resolved path against an unresolved root never
+    matches.
     """
-    _, _, exit_code = _exec(
-        container,
-        ["sh", "-c",
-         "[ -d /workspace/testbed ] || cp -a /testbed /workspace/testbed"],
-    )
-    if exit_code != 0:
-        raise SWEException("Could not prepare a writable copy of /testbed.")
+    root = Path(_repo_root()).resolve()
+    path = Path(path_str)
+    if not path.is_absolute():
+        path = root / path
+    path = path.resolve()
+    if not path.is_relative_to(root):
+        return path, (
+            'Error: you are trying to interact with a file outside your '
+            f'allowed directory ({root})'
+        )
+    return path, None
 
-
-def _get_container() -> Container:
-    container = _find_sandbox_container()
-    _ensure_workspace_repo(container)
-    return container
-
-
-# The path task.eval_script hardcodes internally (e.g. "cd /testbed") —
-# distinct from ROOT_DIR, which is the writable copy our tools operate
-# on. run_tests() rewrites the script to target that copy instead.
-_TESTBED_ORIGINAL = '/testbed'
 
 # The shell `timeout` command's exit code when it kills the process.
 TIMEOUT_EXIT_CODE = 124
+
+# Upper bound on how many entries a listing/search tool returns. A single
+# 50k-char observation costs ~12k input tokens, and every later LLM call
+# re-sends it — one unbounded listing can eat a whole SWE-bench input
+# budget (300k) by itself, which is exactly how a real run died. Bounding
+# by entries keeps the result readable and tells the model to narrow its
+# search instead of silently burning the budget.
+MAX_RESULT_ENTRIES = 200
+
+
+def _format_entries(entries: list[str], what: str) -> str:
+    """Join result lines, bounded by MAX_RESULT_ENTRIES."""
+    if len(entries) <= MAX_RESULT_ENTRIES:
+        return truncate_output("\n".join(entries))
+    hidden = len(entries) - MAX_RESULT_ENTRIES
+    return truncate_output(
+        "\n".join(entries[:MAX_RESULT_ENTRIES])
+        + f"\n... {hidden} more {what} not shown — narrow your pattern."
+    )
+
 
 _PYTHONWARNINGS_RE = re.compile(r"PYTHONWARNINGS=(['\"]?)([^'\"\s]*)\1")
 
@@ -234,7 +329,7 @@ _PIP_EDITABLE_INSTALL_RE = re.compile(
 def _suppress_deprecation_noise(script: str) -> str:
     """Append ignore::DeprecationWarning to any inline PYTHONWARNINGS=...
     assignment in the eval_script, on top of the env-level default passed
-    to _exec() — needed because `VAR=val cmd` fully overrides an
+    to _exec_in() — needed because `VAR=val cmd` fully overrides an
     inherited env var for that one command, not merges with it. Found on
     a real task (sympy__sympy-13480): its own test invocation already
     sets PYTHONWARNINGS='ignore::UserWarning,ignore::SyntaxWarning',
@@ -269,8 +364,12 @@ with open(filepath, "wb") as f:
 _LIST_FILES_SCRIPT = """
 import sys
 from pathlib import Path
-directory, pattern = sys.argv[1], sys.argv[2]
-matches = sorted(str(p) for p in Path(directory).rglob(pattern))
+directory, pattern, root = sys.argv[1], sys.argv[2], sys.argv[3]
+root_path = Path(root).resolve()
+matches = sorted(
+    str(p.resolve().relative_to(root_path))
+    for p in Path(directory).rglob(pattern)
+)
 print("\\n".join(matches))
 """
 
@@ -288,8 +387,9 @@ for file_path in base_path.rglob(file_pattern):
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             for line_number, line in enumerate(f, start=1):
                 if compiled.search(line):
+                    abs_path = file_path.resolve()
                     results.append(
-                        f"{file_path.resolve()}:{line_number} {line.rstrip()}"
+                        f"{abs_path}:{line_number} {line.rstrip()}"
                     )
     except Exception:
         continue
@@ -312,8 +412,9 @@ for file_path in base_path.rglob("*.py"):
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             for line_number, line in enumerate(f, start=1):
                 if pattern.search(line):
+                    abs_path = file_path.resolve()
                     results.append(
-                        f"{file_path.resolve()}:{line_number} {line.rstrip()}"
+                        f"{abs_path}:{line_number} {line.rstrip()}"
                     )
     except Exception:
         continue
@@ -340,9 +441,9 @@ for file_path in base_path.rglob("*.py"):
                 if is_definition_file and line_number == def_line:
                     continue
                 if pattern.search(line_content):
+                    abs_path = file_path.resolve()
                     results.append(
-                        f"{file_path.resolve()}:{line_number} "
-                        f"{line_content.rstrip()}"
+                        f"{abs_path}:{line_number} {line_content.rstrip()}"
                     )
     except Exception:
         continue
@@ -368,7 +469,7 @@ def read_file(filepath: str, start_line: int, end_line: int) -> str:
         '<line_number>: <line_content>' (like `cat -n`).
         An error message if the file cannot be read or the lines don't exist.
     """
-    _, error = _resolve_within_root(filepath)
+    path, error = _resolve_within_root(filepath)
     if error is not None:
         return error
 
@@ -378,8 +479,7 @@ def read_file(filepath: str, start_line: int, end_line: int) -> str:
     if start_line > end_line:
         return 'Error: end_line cannot be less than start_line !'
 
-    container = _get_container()
-    stdout, stderr, exit_code = _exec(container, ["cat", filepath])
+    stdout, stderr, exit_code = _run(["cat", str(path)])
     if exit_code != 0:
         if "No such file" in stderr:
             return ("File not found. Could not read this file ! "
@@ -420,12 +520,11 @@ def edit_file(filepath: str, old_str: str, new_str: str) -> str:
         A confirmation message on success, or an error message if the file
         cannot be read/written or old_str is not found in it.
     """
-    _, error = _resolve_within_root(filepath)
+    path, error = _resolve_within_root(filepath)
     if error is not None:
         return error
 
-    container = _get_container()
-    stdout, stderr, exit_code = _exec(container, ["cat", filepath])
+    stdout, stderr, exit_code = _run(["cat", str(path)])
     if exit_code != 0:
         if "No such file" in stderr:
             return ("File not found. Could not read this file ! "
@@ -442,8 +541,8 @@ def edit_file(filepath: str, old_str: str, new_str: str) -> str:
     b64content = base64.b64encode(
         final_content.encode("utf-8")
     ).decode("ascii")
-    _, werr, wexit = _exec(
-        container, ["python3", "-c", _WRITE_FILE_SCRIPT, filepath, b64content]
+    _, werr, wexit = _run(
+        [sys.executable, "-c", _WRITE_FILE_SCRIPT, str(path), b64content]
     )
     if wexit != 0:
         return f"Error writing file: {werr}"
@@ -463,20 +562,20 @@ def list_files(directory: str, pattern: str) -> str:
     Returns:
         The matching file paths, one per line, or a message if none match.
     """
-    _, error = _resolve_within_root(directory)
+    path, error = _resolve_within_root(directory)
     if error is not None:
         return error
 
-    container = _get_container()
-    stdout, stderr, exit_code = _exec(
-        container, ["python3", "-c", _LIST_FILES_SCRIPT, directory, pattern]
+    stdout, stderr, exit_code = _run(
+        [sys.executable, "-c", _LIST_FILES_SCRIPT, str(path), pattern,
+         _repo_root()]
     )
     if exit_code != 0:
         return f"Error listing files: {stderr}"
     matches = [m for m in stdout.splitlines() if m]
     if not matches:
         return f"No files matching '{pattern}' found in {directory}."
-    return truncate_output("\n".join(matches))
+    return _format_entries(matches, "files")
 
 
 @mcp.tool
@@ -487,12 +586,13 @@ def search_code(pattern: str, file_pattern: str = "*") -> str:
     Args:
         pattern: The regular expression to search for, e.g. 'def parse'.
         file_pattern: Glob pattern to select which files to search
-            (default '*' = every file under ROOT_DIR).
+            (default '*' = every file in the repository).
 
     Returns:
         The matches, one per line, formatted as
         '/absolute/path.py:<line_number> <line_content>'.
-        An error message if the regex is invalid or ROOT_DIR does not exist,
+        An error message if the regex is invalid or the repository root
+        does not exist,
         or 'No matches found.' if nothing matches.
     """
     # Verify regex is valid
@@ -501,14 +601,12 @@ def search_code(pattern: str, file_pattern: str = "*") -> str:
     except re.error as e:
         return f"Error: Invalid regular expression pattern '{pattern}': {e}"
 
-    container = _get_container()
-    _, _, exists_code = _exec(container, ["test", "-d", ROOT_DIR])
-    if exists_code != 0:
-        return f"Error: Workspace path '{ROOT_DIR}' does not exist."
+    root = _repo_root()
+    if not Path(root).is_dir():
+        return f"Error: Workspace path '{root}' does not exist."
 
-    stdout, stderr, exit_code = _exec(
-        container,
-        ["python3", "-c", _SEARCH_CODE_SCRIPT, ROOT_DIR, pattern,
+    stdout, stderr, exit_code = _run(
+        [sys.executable, "-c", _SEARCH_CODE_SCRIPT, root, pattern,
          file_pattern],
     )
     if exit_code != 0:
@@ -516,7 +614,7 @@ def search_code(pattern: str, file_pattern: str = "*") -> str:
     results = [r for r in stdout.splitlines() if r]
     if not results:
         return "No matches found."
-    return truncate_output("\n".join(results))
+    return _format_entries(results, "matches")
 
 
 @mcp.tool
@@ -535,19 +633,18 @@ def search_function_or_class_definition_in_code(name: str) -> str:
         '/absolute/path.py:<line_number> <line_content>'.
         'No definition found for '<name>'.' if it is defined nowhere.
     """
-    container = _get_container()
-    _, _, exists_code = _exec(container, ["test", "-d", ROOT_DIR])
-    if exists_code != 0:
-        return f"Error: Workspace path '{ROOT_DIR}' does not exist."
+    root = _repo_root()
+    if not Path(root).is_dir():
+        return f"Error: Workspace path '{root}' does not exist."
 
-    stdout, stderr, exit_code = _exec(
-        container, ["python3", "-c", _SEARCH_DEF_SCRIPT, ROOT_DIR, name]
+    stdout, stderr, exit_code = _run(
+        [sys.executable, "-c", _SEARCH_DEF_SCRIPT, root, name]
     )
     if exit_code != 0:
         return f"Error searching definitions: {stderr}"
     results = [r for r in stdout.splitlines() if r]
     if results:
-        return truncate_output("\n".join(results))
+        return _format_entries(results, "definitions")
     return f"No definition found for '{name}'."
 
 
@@ -565,25 +662,22 @@ def find_references(name: str, filepath: str, line: int) -> str:
     if error is not None:
         return error
 
-    container = _get_container()
-    _, _, exists_code = _exec(container, ["test", "-d", ROOT_DIR])
-    if exists_code != 0:
-        return f"Error: Workspace path '{ROOT_DIR}' does not exist."
-    _, _, path_exists_code = _exec(container, ["test", "-e", filepath])
-    if path_exists_code != 0:
+    root = _repo_root()
+    if not Path(root).is_dir():
+        return f"Error: Workspace path '{root}' does not exist."
+    if not path.exists():
         return f"Error: Path '{path}' does not exist."
 
-    stdout, stderr, exit_code = _exec(
-        container,
-        ["python3", "-c", _FIND_REFERENCES_SCRIPT, ROOT_DIR, name, filepath,
-         str(line)],
+    stdout, stderr, exit_code = _run(
+        [sys.executable, "-c", _FIND_REFERENCES_SCRIPT, root, name,
+         str(path), str(line)],
     )
     if exit_code != 0:
         return f"Error finding references: {stderr}"
     results = [r for r in stdout.splitlines() if r]
     if not results:
         return f"No references found for '{name}'."
-    return truncate_output("\n".join(results))
+    return _format_entries(results, "references")
 
 
 @mcp.tool
@@ -592,24 +686,20 @@ def run_tests() -> str:
     Runs some tests to verify that the current state
     of the codebase is working well.
     """
-    # Verify task is present (needed for mypy)
     if TASK is None:
-        raise SWEException('Could not run tests: tests not loaded ! '
-                           'This is a server-side problem.')
-    container = _get_container()
-    adapted_script = TASK.eval_script.replace(_TESTBED_ORIGINAL, ROOT_DIR)
-    # Our sandbox is network_mode="none" (§V.2.3) — a plain `pip install
+        return ('Error: no task was loaded, so there is no test suite to '
+                f'run — this server was started without {ENV_SWE_TASK_JSON}.')
+    # The task container is network_mode="none" — a plain `pip install
     # -e .` (build isolation on by default) tries to fetch setuptools
     # from PyPI, fails ("Temporary failure in name resolution"), and the
-    # editable-install pointer is never refreshed to ROOT_DIR — it keeps
-    # pointing at the image's original /testbed, so the test runner
+    # editable-install pointer is never refreshed, so the test runner
     # silently imports the *unedited* code. Found by isolating a real
     # false-negative: a manually-verified-correct fix still failed
     # run_tests() until this flag combo (which skips the network-
     # dependent build step) was added. --no-deps for the same reason
     # (dependency resolution also needs network).
     adapted_script = _PIP_EDITABLE_INSTALL_RE.sub(
-        r"\1 --no-build-isolation --no-deps", adapted_script
+        r"\1 --no-build-isolation --no-deps", TASK.eval_script
     )
     # Repetitive DeprecationWarning noise (e.g. sympy's `collections`
     # ABC imports, re-triggered per test module) can fill even the
@@ -619,26 +709,31 @@ def run_tests() -> str:
     # from the agent's own observation because "45 passed" never made
     # it into the truncated output.
     adapted_script = _suppress_deprecation_noise(adapted_script)
-    stdout, stderr, exit_code = _exec(
-        container,
-        ["timeout", str(TIMEOUT_DELAY_SEC), "bash", "-c", adapted_script],
-        workdir=ROOT_DIR,
-        # PYTHONPATH takes priority over the editable-install pointer,
-        # which stays frozen on the image's original /testbed (pip
-        # install -e . can't refresh it here — no network, and the
-        # user-install fallback needs to write outside our writable
-        # mounts). Forces `import django` (and the rest of the repo) to
-        # resolve from the fixed copy without depending on pip at all —
-        # generic, not specific to Django/conda. PYTHONWARNINGS is a
-        # baseline only — a script that sets its own (via `VAR=val cmd`)
-        # fully overrides it for that command; _suppress_deprecation_noise
-        # above patches those cases directly in the script text.
-        env={
-            "PYTHONPATH": ROOT_DIR,
-            "PYTHONWARNINGS": "ignore::DeprecationWarning",
-            "HOME": "/workspace",
-        },
-    )
+    # No path rewriting: the repository is bind-mounted at /testbed,
+    # exactly where the script already looks.
+    with _task_container() as container:
+        stdout, stderr, exit_code = _exec_in(
+            container,
+            ["timeout", str(TIMEOUT_DELAY_SEC), "bash", "-c", adapted_script],
+            workdir=_TESTBED_IN_IMAGE,
+            # PYTHONPATH makes `import django` (and the rest of the repo)
+            # resolve from the mounted copy without depending on pip at
+            # all — generic, not specific to Django/conda. PYTHONWARNINGS
+            # is a baseline only: a script that sets its own (via
+            # `VAR=val cmd`) fully overrides it for that command, which
+            # _suppress_deprecation_noise above patches in the script text.
+            env={
+                "PYTHONPATH": _TESTBED_IN_IMAGE,
+                "PYTHONWARNINGS": "ignore::DeprecationWarning",
+            },
+        )
+    # The script's own `git apply` / `git checkout` of the test file
+    # leaves the index recording a mode change against HEAD, which
+    # core.fileMode=false does not suppress (it only governs how the
+    # worktree is read). get_patch() reads this same repository
+    # afterwards, so reset the index back to HEAD — worktree untouched —
+    # to keep that noise out of the submitted patch.
+    _run(["git", "reset"], workdir=_repo_root())
     if exit_code == TIMEOUT_EXIT_CODE:
         return f'Evaluation timed out ({TIMEOUT_DELAY_SEC}s)!'
     # Truncated separately, not as one concatenated blob: stderr carries
@@ -665,13 +760,12 @@ def get_patch() -> str:
     staging their content) so untracked files show up in the diff, then
     'git diff HEAD'.
     """
-    container = _get_container()
-    _exec(container, ["git", "add", "-A", "-N"], workdir=ROOT_DIR)
-    stdout, stderr, exit_code = _exec(
-        container,
+    root = _repo_root()
+    _run(["git", "add", "-A", "-N"], workdir=root)
+    stdout, stderr, exit_code = _run(
         ["timeout", str(TIMEOUT_DELAY_SEC),
          "git", "-c", "core.fileMode=false", 'diff', 'HEAD'],
-        workdir=ROOT_DIR,
+        workdir=root,
     )
     if exit_code == TIMEOUT_EXIT_CODE:
         return ('Timeout expired while getting git '
@@ -683,34 +777,34 @@ def get_patch() -> str:
     return truncate_output(stdout)
 
 
-_ORIGINAL_TESTBED_RE = re.compile(r'(?<!/workspace)/testbed\b')
-
-
 @mcp.tool
 def run_command(command: str, workdir: str) -> str:
     """
     Execute a shell command in the specified working directory.
     Returns the command's stdout, stderr, and exit code.
     """
-    _, error = _resolve_within_root(workdir)
+    path, error = _resolve_within_root(workdir)
     if error is not None:
         return error
-
-    if _ORIGINAL_TESTBED_RE.search(command):
-        return ('Error: your command references /testbed, the original '
-                f'read-only checkout. Use {ROOT_DIR} instead — it is the '
-                'writable copy where your edits actually live.')
-
-    container = _get_container()
-    _, _, exists_code = _exec(container, ["test", "-d", workdir])
-    if exists_code != 0:
+    # The repository is bind-mounted into the task container, so a
+    # host-side check is authoritative in both modes.
+    if not path.is_dir():
         return "Error: The given workdir does not exist !"
 
-    stdout, stderr, exit_code = _exec(
-        container,
-        ["timeout", str(TIMEOUT_DELAY_SEC), "bash", "-c", command],
-        workdir=workdir,
-    )
+    argv = ["timeout", str(TIMEOUT_DELAY_SEC), "bash", "-c", command]
+    # With a task loaded, the command runs in that task's container: the
+    # model writes these commands, and the task's own environment (conda,
+    # installed deps) is what makes them meaningful. Pointed at a plain
+    # TESTBED_PATH instead, there is no such image and no sandboxed agent
+    # in the picture — the caller aimed this server at its own
+    # filesystem, so the command runs there.
+    if TASK is None:
+        stdout, stderr, exit_code = _run(argv, workdir=str(path))
+    else:
+        with _task_container() as container:
+            stdout, stderr, exit_code = _exec_in(
+                container, argv, workdir=str(path)
+            )
     if exit_code == TIMEOUT_EXIT_CODE:
         return ('Timeout expired while executing '
                 f'your command ({TIMEOUT_DELAY_SEC}s)!')
@@ -725,9 +819,17 @@ def run_command(command: str, workdir: str) -> str:
 # --- MCP Resources & Prompts ---
 
 
+_NO_TASK_MESSAGE = (
+    "No task is loaded: this server was started to explore a repository "
+    f"({ENV_SWE_TASK_JSON} unset), not to solve a SWE-bench instance."
+)
+
+
 @mcp.resource("swebench://task")
 def task_resource() -> str:
     """The current SWE-bench task: instance id, repo, issue, hints."""
+    if TASK is None:
+        return _NO_TASK_MESSAGE
     hints = TASK.hints_text or "(none)"
     return (
         f"Instance ID: {TASK.instance_id}\n"
@@ -740,8 +842,11 @@ def task_resource() -> str:
 @mcp.prompt
 def solve_swebench_task() -> str:
     """Prompt template: fix the reported bug and verify it."""
+    if TASK is None:
+        return _NO_TASK_MESSAGE
     return (
-        f"Fix the following bug in {TASK.repo}, checked out at {ROOT_DIR}.\n\n"
+        f"Fix the following bug in {TASK.repo}, checked out at "
+        f"{_repo_root()}.\n\n"
         f"Issue:\n{TASK.problem_statement}\n\n"
         "Explore the repository, apply a fix, verify it with run_tests(), "
         "then submit the diff via get_patch() and final_answer(patch)."

@@ -1,0 +1,9 @@
+Testing sandbox manual generation...
+
+INFO: No dedicated manual variable/function found
+Checking if tools from MCP server are discoverable...
+  OK: add is available
+  OK: multiply is available
+  OK: echo is available
+
+=== SANDBOX MANUAL OK ===

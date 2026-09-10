@@ -1,0 +1,4 @@
+OK: short computation completed in 0.000s (result=499500)
+PARTIAL_OUTPUT_MARKER: this line was printed before timeout
+=== TIMEOUT TEST COMPLETE ===
+OK: busy loop interrupted after 5.0s (Execution exceeded the configured time limit)

@@ -1,0 +1,6 @@
+OK: TCP connection blocked
+OK: HTTP request blocked
+OK: HTTPS connection blocked
+OK: requests library blocked
+OK: non-network imports work
+=== NETWORK BLOCKED TEST COMPLETE ===
