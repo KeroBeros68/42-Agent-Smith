@@ -91,6 +91,8 @@ def run(
 
         _announce(step, "Thinking")
         try:
+            if (len(messages) != 0) and messages[-1]['role'] == 'assistant':
+                messages.append({"role": "user", "content": "Solve this bug."})
             metrics = llm.get_response(step, messages)
         except LLMError as e:
             error = str(e)

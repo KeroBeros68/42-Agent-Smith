@@ -538,12 +538,15 @@ def edit_file(filepath: str, old_str: str, new_str: str) -> str:
         return "Could not replace the string: old_str not found !"
     final_content = stdout.replace(old_str, new_str, 1)
 
-    b64content = base64.b64encode(
-        final_content.encode("utf-8")
-    ).decode("ascii")
-    _, werr, wexit = _run(
-        [sys.executable, "-c", _WRITE_FILE_SCRIPT, str(path), b64content]
-    )
+    try:
+        b64content = base64.b64encode(
+            final_content.encode("utf-8")
+        ).decode("ascii")
+        _, werr, wexit = _run(
+            [sys.executable, "-c", _WRITE_FILE_SCRIPT, str(path), b64content]
+        )
+    except OSError:
+        return 'Error when trying to write the file. The edit was too large.'
     if wexit != 0:
         return f"Error writing file: {werr}"
     return 'Successfully replaced the string !'

@@ -113,4 +113,18 @@ runs:
 			$(if $(PROVIDER_URL),--provider-url "$(PROVIDER_URL)")) || exit 1; \
 	done
 
+swebench:
+	@printf "$(CYAN)[SWE-Bench]$(RESET) ➡️ Running benchmark for $(MODEL)\n"
+	@$(export_provider_key); \
+	mkdir -p "docs/benchmarks/models_outputs/$(notdir $(MODEL))"; \
+	for file in ./docs/benchmarks/TASKS/*.json; do \
+		[ -f "$$file" ] || continue; \
+		printf "$(CYAN)  -> processing $${file##*/}$(RESET)\n"; \
+		(cd student && uv run python -m agent_swebench \
+			--task-file "../$$file" \
+			--output "../docs/benchmarks/models_outputs/$(notdir $(MODEL))/$${file##*/}" \
+			--model-name "$(MODEL)" \
+			$(if $(PROVIDER_URL),--provider-url "$(PROVIDER_URL)")); \
+	done
+
 .PHONY: install lint lint-strict debug task tasks run runs
