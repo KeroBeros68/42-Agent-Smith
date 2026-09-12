@@ -17,7 +17,7 @@
   | nemotron-3.5-lightning:free | OpenRouter · NVIDIA | `openrouter.ai/api/v1` |
   | kimi-k3 | NVIDIA NIM | `integrate.api.nvidia.com` |
 
-  8 models across **4 independent providers**, so a single quota wall cannot stall the whole grid.
+> 8 models across **4 independent providers**, so a single quota wall cannot stall the whole grid.
 
 - **Tested on** (5 SWE-bench Verified instances, 4 distinct repositories):
 
@@ -31,7 +31,7 @@
 
 **Why these tasks.** Three reasons, all aimed at not letting a model coast on one familiar codebase:
 
-1. **Breadth.** Five instances spanning four unrelated repositories (a symbolic algebra library, a web framework, a scientific-array library, an ML toolkit) — the agent has to transfer its exploration strategy, not replay one repository's habits.
+1. **Diversity and inclusion <3.** The tasks are from four different and unrelated codebases, with different specialisations. Therefore, a model cannot rely on its knowledge of a single domain to have a higher ranking than the other ones.
 2. **Three different test-runner conventions.** sympy's own `bin/test`, Django's `unittest`, and `pytest` produce three different pass/fail wordings. The agent must interpret all of them from raw stdout — this exercises the sandbox's feedback loop, not just the model.
 3. **A difficulty spread.** All five are SWE-bench Verified (human-validated), and the grid deliberately mixes quieter tasks (`django__django-15104`, `pydata__xarray-4629`) with harder ones (`sympy__sympy-14711`, `sympy__sympy-18189`) so the report shows where models separate rather than a wall of identical outcomes.
 
@@ -39,7 +39,7 @@
 
 Grid: **8 models × 5 tasks = 40 runs** (every model ran every task). All 40 `solution.json` files are in [`docs/benchmarks/models_outputs/`](docs/benchmarks/models_outputs/).
 
-« Pass/Fail » is what the model's own run recorded. « Moulinette » is an independent re-grade with `uv run moulinette_eval validate swebench <task.json> <solution.json>`: correctness (patch applied in a clean SWE-bench container and graded) **and** metrics (iterations ≤ 30, input ≤ 300,000, output ≤ 10,000, time ≤ 900 s). A cell passes only when both steps pass. **All 40 cells were re-validated this way; only 16 pass.**
+« Pass/Fail » is what the model's own run recorded (pass when it calls the final_answer() function). « Moulinette » provided in the subject and verifies that the generated patch is correct with `uv run moulinette_eval validate swebench <task.json> <solution.json>`: correctness (patch applied in a clean SWE-bench container and graded) **and** metrics (iterations ≤ 30, input ≤ 300,000, output ≤ 10,000, time ≤ 900 s). A cell passes only when both steps pass. **All 40 cells were re-validated this way; only 16 pass.**
 
 ### sympy__sympy-14711
 
@@ -252,5 +252,6 @@ Takeaways:
 - **dots-3-note-preview is the best of the rest.** 3/5, 94.6 s/task, and the fastest per iteration (5.4 s) — but it is the one model that burned an iteration budget spinning (`xarray`: 30 iterations, no patch) and its rate-limit exposure on OpenRouter free tier is a real risk for a full exam run.
 
 > **Preferred model: `gemini/gemini-3.5-flash-lite`** — the only model moulinette-verified on all 5 tasks, the fastest per task, the cheapest in output tokens, and the one that respects every §VI.1.2 budget on every task. Runner-up for a second provider slot: **`mistral/codestral-latest`**, for the strongest correctness among the models that miss the budget (2/5 with metrics-valid patches once overrun tasks are excluded).
+
 
 ![42Mulhouse](https://raw.githubusercontent.com/sousampere/sousampere/refs/heads/main/42mulhouse.png)
