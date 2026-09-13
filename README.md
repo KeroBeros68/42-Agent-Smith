@@ -1,5 +1,11 @@
 *This project has been created as part of the 42 curriculum by Kebertra, Gtourdia.*
 
+<div align="center">
+  
+![agentsmith](https://github.com/sousampere/sousampere/blob/main/assets/42_agent-smith.png?raw=true)
+  
+</div>
+
 # 🤖 Agent Smith
 
 ## 📝 Description
@@ -505,3 +511,19 @@ Design decisions, tradeoffs, and known limitations (e.g. the sandbox's
 introspection-based import bypass, see Sandbox Design above) were discussed and
 recorded deliberately rather than left implicit. All final engineering
 decisions, and responsibility for the resulting code, remain with the authors.
+
+# 🚀 Made by
+
+[gtourdia / @sousampere](https://github.com/sousampere)
+- SWE MCP Server
+- MBPP MCP Server
+- LLM inference
+
+[kebertra / @KeroBeros68](https://github.com/KeroBeros68)
+- Sandbox environment
+- SWE agent
+- MBPP agent
+- Global design architecture
+- Agent chore
+
+![Logo](https://github.com/sousampere/sousampere/blob/main/42mulhouse.png?raw=true)
